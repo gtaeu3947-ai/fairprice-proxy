@@ -244,6 +244,7 @@ async function searchByNaverPage(q) {
     const code = it && it.code;
     const name = it && it.name;
     if (!code || !name || !/^\d{6}$/.test(code) || seen.has(code)) continue;
+    if (it.isEtf === true) continue; // 종목코드가 6자리 숫자인 ETF(레버리지·채권혼합 등)는 제외
     seen.add(code);
     out.push({ code, name });
   }
