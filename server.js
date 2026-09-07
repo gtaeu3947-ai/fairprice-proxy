@@ -221,6 +221,32 @@ async function fromFnGuide(code) {
   return out;
 }
 
+/* ───────────────────────── 종목 검색 (이름 → 코드) ─────────────────────────
+ *
+ * 네이버 금융 검색결과 페이지를 쓴다. /api/stock에서 이미 실사용 중인
+ * "/item/main.naver?code=XXXXXX" 링크 패턴을 그대로 재사용하기 때문에,
+ * 별도의(문서화되지 않은) 자동완성 API보다 안정적이다.
+ */
+async function searchByNaverPage(q) {
+  const url = 'https://finance.naver.com/search/searchList.naver?query=' + encodeURIComponent(q);
+  const html = await fetchHtml(url);
+  const $ = cheerio.load(html);
+  const out = [];
+  const seen = new Set();
+  $('a[href*="/item/main.naver?code="]').each((_, a) => {
+    const href = $(a).attr('href') || '';
+    const m = href.match(/code=(\d{6})/);
+    if (!m) return;
+    const code = m[1];
+    if (seen.has(code)) return;
+    const name = $(a).text().replace(/\s+/g, ' ').trim();
+    if (!name) return;
+    seen.add(code);
+    out.push({ code, name });
+  });
+  return out.slice(0, 10);
+}
+
 /* ───────────────────────── 과거 시세 (일별 종가) ─────────────────────────
  *
  * 네이버 금융의 "일별 시세" 페이지를 페이지 단위(10행씩)로 긁는다.
@@ -368,11 +394,30 @@ app.get('/api/search', async (req, res) => {
   const cached = cacheGet('q:' + q);
   if (cached) return res.json(cached);
 
+  const errors = [];
+
+  // 1순위: 네이버 금융 검색결과 페이지. /api/stock에서 이미 실사용 중인 것과 같은
+  // "/item/main.naver?code=XXXXXX" 링크 패턴을 쓰기 때문에 가장 안정적이다.
+  try {
+    const out = await searchByNaverPage(q);
+    if (out.length) {
+      cacheSet('q:' + q, out);
+      return res.json(out);
+    }
+  } catch (e) {
+    errors.push('검색 페이지: ' + e.message);
+  }
+
+  // 2순위: 자동완성 API. HTML 검색 페이지 구조가 바뀌었을 때의 보조 수단.
   try {
     const url = 'https://ac.finance.naver.com/ac?q=' + encodeURIComponent(q)
               + '&q_enc=utf-8&st=111&frm=stock&r_format=json&r_enc=utf-8&r_unicode=0&t_koreng=1&r_lt=111';
     const r = await fetch(url, { headers: { 'User-Agent': UA, Referer: 'https://finance.naver.com/' } });
-    const j = await r.json();
+    const text = await r.text();
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    let j;
+    try { j = JSON.parse(text); }
+    catch { throw new Error('JSON 파싱 실패: ' + text.slice(0, 120)); }
     const items = [];
     (j.items || []).forEach(group => {
       (group || []).forEach(row => {
@@ -382,10 +427,36 @@ app.get('/api/search', async (req, res) => {
       });
     });
     const out = items.slice(0, 10);
-    cacheSet('q:' + q, out);
-    res.json(out);
+    if (out.length) {
+      cacheSet('q:' + q, out);
+      return res.json(out);
+    }
+    errors.push('자동완성: 결과 없음');
   } catch (e) {
-    res.status(502).json({ error: '종목 검색에 실패했습니다. 6자리 종목코드를 직접 넣으십시오.', detail: e.message });
+    errors.push('자동완성: ' + e.message);
+  }
+
+  res.status(502).json({
+    error: '종목 검색에 실패했습니다. 6자리 종목코드를 직접 넣으십시오.',
+    detail: errors,
+  });
+});
+
+app.get('/api/search-raw', async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const src = req.query.src === 'ac' ? 'ac' : 'page';
+  try {
+    if (src === 'ac') {
+      const url = 'https://ac.finance.naver.com/ac?q=' + encodeURIComponent(q)
+                + '&q_enc=utf-8&st=111&frm=stock&r_format=json&r_enc=utf-8&r_unicode=0&t_koreng=1&r_lt=111';
+      const r = await fetch(url, { headers: { 'User-Agent': UA, Referer: 'https://finance.naver.com/' } });
+      res.type('text/plain').send(`HTTP ${r.status}\n\n` + await r.text());
+    } else {
+      const url = 'https://finance.naver.com/search/searchList.naver?query=' + encodeURIComponent(q);
+      res.type('text/plain').send(await fetchHtml(url));
+    }
+  } catch (e) {
+    res.status(502).send(e.message);
   }
 });
 
@@ -868,6 +939,6 @@ app.listen(PORT, () => console.log(`fairprice-proxy listening on ${PORT}`));
 
 module.exports = {
   app, fromNaver, fromFnGuide, toNum, rowByLabel, recordVisit, getStats, kstDate, lastNDays,
-  fetchNaverHistoryPage, fetchNaverHistory, getFundamentals,
+  fetchNaverHistoryPage, fetchNaverHistory, getFundamentals, searchByNaverPage,
   fetchMarketCapPage, fetchMarketCapUniverse, fetchInvestorFlow, screenOne, runScreen,
 };
