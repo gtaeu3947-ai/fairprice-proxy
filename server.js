@@ -751,14 +751,22 @@ app.get('/api/flow-raw/:code', async (req, res) => {
  */
 
 app.get('/api/screen', checkStatsAuth, async (req, res) => {
+  // "숫자 || 기본값" 패턴은 0을 "값 없음"으로 오인해 몰래 기본값으로 되돌린다
+  // (예: 사용자가 최소 수급강도를 0으로 명시해도 결과적으로 3%가 적용됨).
+  // 쿼리 파라미터가 실제로 없을 때만 기본값을 쓰도록 구분한다.
+  const numParam = (raw, def) => {
+    if (raw === undefined || raw === '') return def;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : def;
+  };
   const opt = {
-    universeN: Math.min(300, Math.max(10, Number(req.query.n) || 100)),
+    universeN: Math.min(300, Math.max(10, numParam(req.query.n, 100))),
     regime: ['up', 'flat', 'down'].includes(req.query.regime) ? req.query.regime : 'flat',
-    kbasePct: Number(req.query.kbase) || 4.64, // 기본: AA등급 5년물 — 대형주 위주 유니버스 기준
-    minGapPct: Math.max(0, Number(req.query.minGap) || 15),
-    minFlowStrength: Math.max(0, Number(req.query.minFlow) || 0.03),
-    minVolumeRatio: Math.max(1, Number(req.query.minVolRatio) || 1.05),
-    flowDays: Math.min(20, Math.max(1, Number(req.query.flowDays) || 5)),
+    kbasePct: numParam(req.query.kbase, 4.64), // 기본: AA등급 5년물 — 대형주 위주 유니버스 기준
+    minGapPct: Math.max(0, numParam(req.query.minGap, 15)),
+    minFlowStrength: Math.max(0, numParam(req.query.minFlow, 0.03)),
+    minVolumeRatio: Math.max(1, numParam(req.query.minVolRatio, 1.05)),
+    flowDays: Math.min(20, Math.max(1, numParam(req.query.flowDays, 5))),
   };
   try {
     const result = await runScreen(opt);
