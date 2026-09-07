@@ -546,10 +546,11 @@ async function fetchMarketCapUniverse(n) {
 
 /**
  * 필드명 후보 여러 개 중 실제로 존재하는 키를 찾는다.
- * "기관 순매수", "외국인 순매수" 같은 필드명이 정확히 뭔지 아직 실데이터로
- * 확인 못 했다 — 외부 문서에서 관찰된 foreignPureBuy/organizationPureBuy
- * 계열 표기를 우선 후보로 두고, 대소문자·부분일치로 폭넓게 찾는다.
- * /api/flow-raw로 실제 응답을 보고 나면 이 목록만 정확한 키로 좁히면 된다.
+ * 실제 응답(2026-09)으로 확인된 필드명은 organPureBuyQuant(기관 순매수),
+ * foreignerPureBuyQuant(외국인 순매수), tradeVolume(거래량), bizdate(날짜)다.
+ * 정확한 키 대신 "organ+buy가 같이 들어감" 같은 느슨한 매칭을 쓰는 이유는,
+ * 네이버가 필드명을 조금 바꿔도(예: Quant → Amt) 계속 버티게 하기 위해서다.
+ * 매칭이 안 되면 /api/flow-raw로 실제 응답을 보고 검색 키워드를 조정한다.
  */
 function pickField(row, mustIncludeAll) {
   const keys = Object.keys(row || {});
@@ -762,6 +763,28 @@ app.get('/api/screen', checkStatsAuth, async (req, res) => {
   try {
     const result = await runScreen(opt);
     res.json(result);
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
+// 스캔 전체를 안 돌리고, 종목 하나의 수급 계산값만 빠르게 확인하는 진단용 엔드포인트.
+app.get('/api/flow/:code', checkStatsAuth, async (req, res) => {
+  const code = String(req.params.code).replace(/\D/g, '').padStart(6, '0');
+  const days = Number(req.query.days) || 5;
+  try {
+    const flow = await fetchInvestorFlow(code, days);
+    res.json({
+      code,
+      hasData: flow.hasData,
+      flowStrength: flow.flowStrength,
+      flowStrengthPct: flow.flowStrength != null ? (flow.flowStrength * 100).toFixed(2) + '%' : null,
+      volumeRatio: flow.volumeRatio,
+      flowSum: flow.flowSum,
+      volAvg20: flow.volAvg20,
+      lastVol: flow.lastVol,
+      recentRows: flow.rows.slice(-days),
+    });
   } catch (e) {
     res.status(502).json({ error: e.message });
   }
