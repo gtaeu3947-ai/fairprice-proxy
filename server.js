@@ -223,27 +223,30 @@ async function fromFnGuide(code) {
 
 /* ───────────────────────── 종목 검색 (이름 → 코드) ─────────────────────────
  *
- * 네이버 금융 검색결과 페이지를 쓴다. /api/stock에서 이미 실사용 중인
- * "/item/main.naver?code=XXXXXX" 링크 패턴을 그대로 재사용하기 때문에,
- * 별도의(문서화되지 않은) 자동완성 API보다 안정적이다.
+ * 네이버 모바일 증권의 자동완성 API를 쓴다 (m.stock.naver.com/front-api/search/autoComplete).
+ * 예전에 쓰던 finance.naver.com의 검색결과 페이지·자동완성 API는 둘 다 주소가
+ * 없어졌거나(404) 막혀서, 실제로 응답이 오는 이 엔드포인트로 교체했다.
  */
 async function searchByNaverPage(q) {
-  const url = 'https://finance.naver.com/search/searchList.naver?query=' + encodeURIComponent(q);
-  const html = await fetchHtml(url);
-  const $ = cheerio.load(html);
+  const url = 'https://m.stock.naver.com/front-api/search/autoComplete?query='
+            + encodeURIComponent(q) + '&target=stock';
+  const r = await fetch(url, { headers: { 'User-Agent': UA, Referer: 'https://m.stock.naver.com/' } });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const text = await r.text();
+  let j;
+  try { j = JSON.parse(text); }
+  catch { throw new Error('JSON 파싱 실패: ' + text.slice(0, 120)); }
+
+  const items = (j.result && j.result.items) || [];
   const out = [];
   const seen = new Set();
-  $('a[href*="/item/main.naver?code="]').each((_, a) => {
-    const href = $(a).attr('href') || '';
-    const m = href.match(/code=(\d{6})/);
-    if (!m) return;
-    const code = m[1];
-    if (seen.has(code)) return;
-    const name = $(a).text().replace(/\s+/g, ' ').trim();
-    if (!name) return;
+  for (const it of items) {
+    const code = it && it.code;
+    const name = it && it.name;
+    if (!code || !name || !/^\d{6}$/.test(code) || seen.has(code)) continue;
     seen.add(code);
     out.push({ code, name });
-  });
+  }
   return out.slice(0, 10);
 }
 
@@ -396,8 +399,7 @@ app.get('/api/search', async (req, res) => {
 
   const errors = [];
 
-  // 1순위: 네이버 금융 검색결과 페이지. /api/stock에서 이미 실사용 중인 것과 같은
-  // "/item/main.naver?code=XXXXXX" 링크 패턴을 쓰기 때문에 가장 안정적이다.
+  // 1순위: 네이버 모바일 증권 자동완성 API (m.stock.naver.com). 실제로 응답이 오는 걸 확인함.
   try {
     const out = await searchByNaverPage(q);
     if (out.length) {
@@ -408,32 +410,32 @@ app.get('/api/search', async (req, res) => {
     errors.push('검색 페이지: ' + e.message);
   }
 
-  // 2순위: 자동완성 API. HTML 검색 페이지 구조가 바뀌었을 때의 보조 수단.
+  // 2순위: 같은 자동완성 API의 legacy 도메인. 1순위가 도메인/구조를 바꿨을 때의 보조 수단.
   try {
-    const url = 'https://ac.finance.naver.com/ac?q=' + encodeURIComponent(q)
-              + '&q_enc=utf-8&st=111&frm=stock&r_format=json&r_enc=utf-8&r_unicode=0&t_koreng=1&r_lt=111';
-    const r = await fetch(url, { headers: { 'User-Agent': UA, Referer: 'https://finance.naver.com/' } });
+    const url = 'https://ac.stock.naver.com/ac?q=' + encodeURIComponent(q)
+              + '&target=stock,index,marketindicator,coin,ipo&st=111';
+    const r = await fetch(url, { headers: { 'User-Agent': UA, Referer: 'https://m.stock.naver.com/' } });
     const text = await r.text();
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     let j;
     try { j = JSON.parse(text); }
     catch { throw new Error('JSON 파싱 실패: ' + text.slice(0, 120)); }
-    const items = [];
-    (j.items || []).forEach(group => {
-      (group || []).forEach(row => {
-        const name = row?.[0]?.[0];
-        const code = row?.[1]?.[0];
-        if (name && /^\d{6}$/.test(code || '')) items.push({ code, name });
-      });
-    });
-    const out = items.slice(0, 10);
-    if (out.length) {
-      cacheSet('q:' + q, out);
-      return res.json(out);
+    const items = (j.result && j.result.items) || [];
+    const out = [];
+    const seen = new Set();
+    for (const it of items) {
+      const code = it && it.code, name = it && it.name;
+      if (!code || !name || !/^\d{6}$/.test(code) || seen.has(code)) continue;
+      seen.add(code);
+      out.push({ code, name });
     }
-    errors.push('자동완성: 결과 없음');
+    if (out.length) {
+      cacheSet('q:' + q, out.slice(0, 10));
+      return res.json(out.slice(0, 10));
+    }
+    errors.push('자동완성(legacy): 결과 없음');
   } catch (e) {
-    errors.push('자동완성: ' + e.message);
+    errors.push('자동완성(legacy): ' + e.message);
   }
 
   res.status(502).json({
@@ -447,9 +449,9 @@ app.get('/api/search-raw', async (req, res) => {
   const src = req.query.src === 'ac' ? 'ac' : 'page';
   try {
     if (src === 'ac') {
-      const url = 'https://ac.finance.naver.com/ac?q=' + encodeURIComponent(q)
-                + '&q_enc=utf-8&st=111&frm=stock&r_format=json&r_enc=utf-8&r_unicode=0&t_koreng=1&r_lt=111';
-      const r = await fetch(url, { headers: { 'User-Agent': UA, Referer: 'https://finance.naver.com/' } });
+      const url = 'https://ac.stock.naver.com/ac?q=' + encodeURIComponent(q)
+                + '&target=stock,index,marketindicator,coin,ipo&st=111';
+      const r = await fetch(url, { headers: { 'User-Agent': UA, Referer: 'https://m.stock.naver.com/' } });
       res.type('text/plain').send(`HTTP ${r.status}\n\n` + await r.text());
     } else {
       const url = 'https://finance.naver.com/search/searchList.naver?query=' + encodeURIComponent(q);
