@@ -673,6 +673,16 @@ async function runScreen(opt) {
   const scored = results.filter(r => !r.skipped);
   const skippedCount = results.length - scored.length;
 
+  // 어느 조건에서 다 떨어지는지 바로 보이게, 단계별로 몇 개가 남는지 센다.
+  const funnel = {
+    scored: scored.length,
+    undervalued: scored.filter(r => r.undervalued).length,
+    passedGap: scored.filter(r => r.undervalued && r.gapPct <= -opt.minGapPct).length,
+    flowDataAvailable: scored.filter(r => r.flowDataAvailable).length,
+    passedFlow: scored.filter(r => r.flowDataAvailable && r.flowStrength >= opt.minFlowStrength).length,
+    passedVolume: scored.filter(r => r.flowDataAvailable && r.volumeRatio >= opt.minVolumeRatio).length,
+  };
+
   const passed = scored.filter(r =>
     r.undervalued &&
     r.gapPct <= -opt.minGapPct &&
@@ -688,6 +698,7 @@ async function runScreen(opt) {
     consideredCount: scored.length,
     skippedCount,
     passedCount: passed.length,
+    funnel,
     candidates: passed.slice(0, 3),
     runnerUps: passed.slice(3, 13), // 참고용으로 좀 더 보여줌
     opt,
