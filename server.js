@@ -544,49 +544,58 @@ async function fetchMarketCapUniverse(n) {
  * 열 순서가 바뀌어도 헤더 문구만 같으면 버틴다.
  */
 
+/**
+ * 필드명 후보 여러 개 중 실제로 존재하는 키를 찾는다.
+ * "기관 순매수", "외국인 순매수" 같은 필드명이 정확히 뭔지 아직 실데이터로
+ * 확인 못 했다 — 외부 문서에서 관찰된 foreignPureBuy/organizationPureBuy
+ * 계열 표기를 우선 후보로 두고, 대소문자·부분일치로 폭넓게 찾는다.
+ * /api/flow-raw로 실제 응답을 보고 나면 이 목록만 정확한 키로 좁히면 된다.
+ */
+function pickField(row, mustIncludeAll) {
+  const keys = Object.keys(row || {});
+  const key = keys.find(k => {
+    const lk = k.toLowerCase();
+    return mustIncludeAll.every(s => lk.includes(s.toLowerCase()));
+  });
+  return key ? row[key] : undefined;
+}
+function pickDate(row) {
+  const keys = Object.keys(row || {});
+  const key = keys.find(k => /date/i.test(k));
+  return key ? row[key] : undefined;
+}
+
 async function fetchInvestorFlow(code, days) {
   const N = days || 5;
   const cacheKey = 'flow:' + code + ':' + N;
   const cached = cacheGet(cacheKey);
   if (cached) return cached;
 
-  const url = `https://finance.naver.com/item/frgn.naver?code=${code}`;
-  const html = await fetchHtml(url);
-  const $ = cheerio.load(html);
+  const url = `https://stock.naver.com/api/domestic/detail/${code}/trend?tradeType=KRX&startIdx=0&pageSize=20`;
+  const r = await fetch(url, { headers: { 'User-Agent': UA, Referer: 'https://stock.naver.com/' } });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const text = await r.text();
+  let j;
+  try { j = JSON.parse(text); }
+  catch { throw new Error('JSON 파싱 실패: ' + text.slice(0, 150)); }
 
-  // 데이터 표(가장 행이 많은 table.type2)의 헤더에서 열 인덱스를 찾는다.
-  let table = null, maxRows = 0;
-  $('table').each((_, t) => {
-    const rows = $(t).find('tr').length;
-    if (rows > maxRows) { maxRows = rows; table = t; }
-  });
-  if (!table) throw new Error('수급 표를 찾지 못했습니다.');
-  const $t = cheerio.load($.html(table));
+  // 응답이 배열인지, {result:[...]}인지, {result:{rows:[...]}}인지 아직 실제로 못 봤다 — 셋 다 시도.
+  const raw = Array.isArray(j) ? j
+    : Array.isArray(j.result) ? j.result
+    : (j.result && Array.isArray(j.result.rows)) ? j.result.rows
+    : (Array.isArray(j.rows)) ? j.rows
+    : [];
 
-  const headerCells = [];
-  $t('tr').first().children('th,td').each((i, th) => {
-    headerCells.push($t(th).text().replace(/\s+/g, ' ').trim());
-  });
-  const idxOf = (pred) => headerCells.findIndex(pred);
-  const iVolume = idxOf(h => h.includes('거래량'));
-  const iInst = idxOf(h => h.includes('기관') && !h.includes('보유'));
-  const iForeign = idxOf(h => h.includes('외국인') && (h.includes('순매매') || h.includes('순매수') || (!h.includes('보유') && !h.includes('비중'))));
-
-  const rows = [];
-  $t('tr').each((_, tr) => {
-    const tds = $t(tr).children('td');
-    if (!tds.length) return;
-    const dateText = $t(tds[0]).text().trim();
-    const m = dateText.match(/^(\d{2})\.(\d{2})\.(\d{2})$/) || dateText.match(/^(\d{4})\.(\d{2})\.(\d{2})$/);
-    if (!m) return;
-    const year = m[1].length === 2 ? '20' + m[1] : m[1];
-    const date = `${year}-${m[2]}-${m[3]}`;
-    const volume = iVolume >= 0 ? toNum($t(tds[iVolume]).text()) : null;
-    const instNet = iInst >= 0 ? toNum($t(tds[iInst]).text()) : null;
-    const foreignNet = iForeign >= 0 ? toNum($t(tds[iForeign]).text()) : null;
-    rows.push({ date, volume, instNet, foreignNet });
-  });
-  rows.sort((a, b) => a.date.localeCompare(b.date)); // 오름차순으로 정리
+  const rows = raw.map(row => {
+    const rawDate = String(pickDate(row) ?? '');
+    const m = rawDate.match(/(\d{4})\D?(\d{2})\D?(\d{2})/);
+    const date = m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+    const volume = toNum(pickField(row, ['volume']));
+    const foreignNet = toNum(pickField(row, ['foreign', 'buy']) ?? pickField(row, ['foreign', 'net']));
+    const instNet = toNum(pickField(row, ['organ', 'buy']) ?? pickField(row, ['inst', 'net']));
+    return { date, volume, instNet, foreignNet };
+  }).filter(r => r.date);
+  rows.sort((a, b) => a.date.localeCompare(b.date));
 
   const recentForFlow = rows.slice(-N);
   const recentForVol = rows.slice(-20);
@@ -595,12 +604,11 @@ async function fetchInvestorFlow(code, days) {
   const volAvg20 = recentForVol.length ? recentForVol.reduce((s, r) => s + (r.volume || 0), 0) / recentForVol.length : null;
   const lastVol = rows.length ? rows[rows.length - 1].volume : null;
   const volumeRatio = (volAvg20 && lastVol != null) ? lastVol / volAvg20 : null;
-  // 순매수강도: 최근 N일 기관+외국인 순매수량이 같은 기간 거래량에서 차지하는 비중.
   const flowStrength = volSumRecent > 0 ? flowSum / volSumRecent : null;
 
   const out = {
     code, url, rows, flowSum, flowStrength, volumeRatio, volAvg20, lastVol,
-    hasData: iInst >= 0 || iForeign >= 0,
+    hasData: rows.length > 0 && rows.some(r => r.instNet != null || r.foreignNet != null),
   };
   cacheSet(cacheKey, out);
   return out;
@@ -726,8 +734,9 @@ app.get('/api/universe-raw', async (req, res) => {
 app.get('/api/flow-raw/:code', async (req, res) => {
   const code = String(req.params.code).replace(/\D/g, '');
   try {
-    const url = `https://finance.naver.com/item/frgn.naver?code=${code}`;
-    res.type('text/plain').send(await fetchHtml(url));
+    const url = `https://stock.naver.com/api/domestic/detail/${code}/trend?tradeType=KRX&startIdx=0&pageSize=20`;
+    const r = await fetch(url, { headers: { 'User-Agent': UA, Referer: 'https://stock.naver.com/' } });
+    res.type('text/plain').send(`HTTP ${r.status}\n\n` + await r.text());
   } catch (e) {
     res.status(502).send(e.message);
   }
