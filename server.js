@@ -764,7 +764,7 @@ app.get('/api/screen', checkStatsAuth, async (req, res) => {
     const result = await runScreen(opt);
     res.json(result);
   } catch (e) {
-    res.status(502).json({ error: e.message });
+    res.status(502).json({ error: e.message, stack: String(e.stack || '').split('\n').slice(0, 5) });
   }
 });
 
