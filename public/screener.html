@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>저평가·수급 스크리너</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20rx='14'%20fill='%2316202C'/%3E%3Crect%20x='14'%20y='34'%20width='8'%20height='18'%20rx='2'%20fill='%23C8342B'/%3E%3Crect%20x='28'%20y='22'%20width='8'%20height='30'%20rx='2'%20fill='%23A97614'/%3E%3Crect%20x='42'%20y='14'%20width='8'%20height='38'%20rx='2'%20fill='%231F5FBF'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<style>
+  :root{
+    --ink:#16202C; --ink-2:#4A5966; --ink-3:#7B8896;
+    --paper:#EDF0F4; --panel:#FFFFFF; --line:#D6DDE5; --line-2:#E9EEF3;
+    --gain:#12704C; --loss:#B4451C; --accent:#6B3FA0;
+    --r:10px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--paper); color:var(--ink);
+    font-family:"Pretendard Variable",Pretendard,-apple-system,"Apple SD Gothic Neo","Malgun Gothic","맑은 고딕",sans-serif;
+    font-size:15px; line-height:1.55;
+    font-feature-settings:"tnum" 1;
+    -webkit-text-size-adjust:100%;
+  }
+  .wrap{max-width:1060px;margin:0 auto;padding:16px 16px 72px}
+  h1,h2,h3{margin:0;font-weight:700;letter-spacing:-0.02em}
+
+  nav{font-size:13px;display:flex;gap:14px;flex-wrap:wrap}
+  nav a{color:var(--ink-2);text-decoration:none}
+  nav a:hover{text-decoration:underline}
+
+  header{padding:8px 0 20px;border-bottom:2px solid var(--ink)}
+  h1{font-size:24px;line-height:1.2;margin-top:8px}
+  .sub{color:var(--ink-2);font-size:13.5px;margin-top:6px}
+
+  .warnbox{
+    margin-top:14px;padding:12px 14px;background:#FDF1EC;border:1px solid #F0C9B8;
+    border-radius:var(--r);color:#7A2E10;font-size:13.5px
+  }
+  .warnbox b{display:block;margin-bottom:4px}
+
+  section{margin-top:24px}
+  .stitle{display:flex;align-items:baseline;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+  .stitle h2{font-size:17px}
+  .stitle span{font-size:13px;color:var(--ink-3)}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+
+  .grid{display:grid;gap:12px 14px;grid-template-columns:repeat(4,1fr)}
+  .f{display:flex;flex-direction:column;gap:5px;min-width:0}
+  .f label{font-size:12.5px;color:var(--ink-2);font-weight:600}
+  .f .hint{font-weight:400;color:var(--ink-3)}
+  input,select{
+    font:inherit;font-size:15px;color:var(--ink);background:#FBFCFD;
+    border:1px solid var(--line);border-radius:7px;padding:9px 10px;width:100%;
+    font-feature-settings:"tnum" 1;
+  }
+  input:focus,select:focus,button:focus-visible{outline:2.5px solid var(--accent);outline-offset:1px}
+
+  button.act{
+    font:inherit;font-weight:700;font-size:15px;cursor:pointer;background:var(--ink);color:#fff;
+    border:none;border-radius:8px;padding:12px 18px;
+  }
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px}
+  .fstatus{font-size:13px;color:var(--ink-3)}
+  .fstatus.err{color:var(--loss)}
+  .fstatus.busy{color:var(--accent)}
+
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .cand{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:15px;border-top:4px solid var(--accent);position:relative}
+  .cand .rank{position:absolute;top:-12px;left:14px;background:var(--accent);color:#fff;font-size:12px;font-weight:800;padding:3px 9px;border-radius:12px}
+  .cand h3{font-size:15.5px;margin-top:6px}
+  .cand .code{color:var(--ink-3);font-size:12.5px;font-weight:400}
+  .cand .metric{display:flex;justify-content:space-between;font-size:13px;margin-top:8px;padding-top:8px;border-top:1px solid var(--line-2)}
+  .cand .metric span:first-child{color:var(--ink-2)}
+  .cand .gap{font-size:22px;font-weight:800;margin:8px 0 2px;color:var(--gain)}
+
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{padding:8px 10px;text-align:right;border-bottom:1px solid var(--line-2)}
+  th{font-size:12px;color:var(--ink-2);font-weight:600;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  tbody tr:last-child td{border-bottom:none}
+  .empty{color:var(--ink-3);font-size:13.5px;padding:20px 4px;text-align:center}
+
+  .note{font-size:13px;color:var(--ink-2);margin-top:10px}
+  details{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:0 14px}
+  summary{cursor:pointer;padding:13px 0;font-weight:600;font-size:14.5px}
+  details[open] summary{border-bottom:1px solid var(--line-2)}
+  .dbody{padding:12px 0 14px;font-size:13.5px;color:var(--ink-2)}
+  .dbody ul{margin:8px 0;padding-left:18px} .dbody li{margin:4px 0}
+
+  footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink-3)}
+
+  @media (max-width:820px){
+    .grid{grid-template-columns:repeat(2,1fr)}
+    .cards{grid-template-columns:1fr}
+    h1{font-size:20px}
+    .wrap{padding:14px 13px 60px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <nav>
+    <a href="index.html">상황별 적정주가 계산기</a>
+    <a href="simulator.html">물타기·불타기 시뮬레이터</a>
+  </nav>
+  <h1>저평가·수급 스크리너</h1>
+  <p class="sub">시가총액 상위 종목을 대상으로, 적정주가 대비 저평가 폭이 크면서 최근 기관·외국인 순매수와 거래량 증가가 함께 나타난 종목을 찾습니다.</p>
+  <div class="warnbox">
+    <b>이 페이지는 투자 권유가 아닙니다.</b>
+    아래 결과는 정해진 계산식과 임계값을 통과한 종목을 나열한 것일 뿐, 매수를 추천하는 것이 아닙니다.
+    저평가·수급 신호는 참고용 스크리닝 기준이며 미래 수익을 보장하지 않습니다. 투자 판단과 그 결과는 이용자 본인의 몫입니다.
+  </div>
+</header>
+
+<section>
+  <div class="stitle"><h2>스캔 조건</h2><span>기본값 그대로도 실행할 수 있습니다</span></div>
+  <div class="panel">
+    <div class="grid">
+      <div class="f">
+        <label for="n">유니버스 (코스피 시가총액 상위)</label>
+        <input id="n" type="number" value="100" min="10" max="300" step="10">
+      </div>
+      <div class="f">
+        <label for="regime">시장 국면</label>
+        <select id="regime">
+          <option value="up">상승장</option>
+          <option value="flat" selected>횡보장</option>
+          <option value="down">하락장</option>
+        </select>
+      </div>
+      <div class="f">
+        <label for="kbase">기준 요구수익률 (%)</label>
+        <input id="kbase" type="number" value="4.64" step="0.01">
+      </div>
+      <div class="f">
+        <label for="minGap">최소 저평가 폭 (%)</label>
+        <input id="minGap" type="number" value="20" step="1">
+      </div>
+      <div class="f">
+        <label for="minFlow">최소 수급강도 (%)</label>
+        <input id="minFlow" type="number" value="5" step="0.5">
+        <span class="hint">기관+외국인 순매수 ÷ 거래량</span>
+      </div>
+      <div class="f">
+        <label for="minVolRatio">최소 거래량비율 (배)</label>
+        <input id="minVolRatio" type="number" value="1.3" step="0.1">
+        <span class="hint">최근일 ÷ 최근20일평균</span>
+      </div>
+      <div class="f">
+        <label for="flowDays">수급 판단 기간 (거래일)</label>
+        <input id="flowDays" type="number" value="5" step="1" min="1" max="20">
+      </div>
+    </div>
+    <div class="row">
+      <button class="act" id="btnScan">스캔 실행</button>
+      <span id="status" class="fstatus">유니버스 크기만큼 종목당 3건씩 요청이 나갑니다. 100종목 기준 1~2분 정도 걸릴 수 있습니다. 같은 날 같은 조건이면 캐시된 결과가 바로 나옵니다.</span>
+    </div>
+  </div>
+</section>
+
+<section id="resultSec" style="display:none">
+  <div class="stitle"><h2>TOP 3</h2><span id="scanMeta"></span></div>
+  <div id="cards" class="cards"></div>
+  <p class="empty" id="emptyMsg" style="display:none">조건을 만족하는 종목이 없습니다. 임계값을 낮추거나 유니버스를 넓혀 보세요.</p>
+</section>
+
+<section id="runnerSec" style="display:none">
+  <div class="stitle"><h2>조건은 통과했지만 순위 밖</h2><span>참고용</span></div>
+  <div class="panel">
+    <table>
+      <thead><tr><th>종목</th><th>현재가</th><th>적정주가</th><th>괴리율</th><th>수급강도</th><th>거래량비율</th></tr></thead>
+      <tbody id="runnerTable"></tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <details>
+    <summary>계산 방식</summary>
+    <div class="dbody">
+      <ul>
+        <li>적정주가는 <a href="index.html">상황별 적정주가 계산기</a>와 같은 공식(초과이익모델)을 씁니다. 여기서는 종목마다 신용등급을 따로 조회하지 않고, 위에서 정한 단일 요구수익률을 유니버스 전체에 동일하게 적용합니다.</li>
+        <li>괴리율 = (현재가 ÷ 적정주가 − 1). 음수가 클수록(더 마이너스일수록) 저평가입니다.</li>
+        <li>ROE가 요구수익률보다 낮은 종목(초과이익이 없는 종목)은 계산에서 제외합니다.</li>
+        <li>수급강도 = 최근 N거래일 (기관 순매수 + 외국인 순매수) 합계 ÷ 같은 기간 총 거래량. 거래량비율 = 최근 1일 거래량 ÷ 최근 20일 평균 거래량.</li>
+        <li>저평가 폭·수급강도·거래량비율 세 조건을 모두 만족한 종목만 후보에 오르고, 그중 저평가 폭이 큰 순으로 최대 3개를 보여줍니다.</li>
+      </ul>
+    </div>
+  </details>
+  <details style="margin-top:8px">
+    <summary>한계와 주의사항</summary>
+    <div class="dbody">
+      <ul>
+        <li>유니버스는 코스피 시가총액 상위 종목만 대상입니다(코스닥 미포함). 순위가 바뀌는 종목이나 상위권 밖 종목은 애초에 스캔 대상이 아닙니다.</li>
+        <li>"수급강도"는 기관·외국인의 순매수 흔적을 보는 것이지, 실제로 특정 세력이 개입했는지를 확인하는 지표가 아닙니다. 우연히 조건을 만족한 것일 수 있습니다.</li>
+        <li>기준 요구수익률을 유니버스 전체에 동일하게 적용하기 때문에, 실제 신용등급이 낮은 기업은 저평가 폭이 과장되게 나올 수 있습니다.</li>
+        <li>같은 날짜에는 캐시된 결과가 재사용됩니다. 조건(유니버스 크기·국면·임계값 등)을 바꾸면 새로 스캔합니다.</li>
+        <li>결과는 과거·현재 데이터에 대한 계산일 뿐이며, 다음 날 주가가 어떻게 될지 예측하지 않습니다.</li>
+      </ul>
+    </div>
+  </details>
+</section>
+
+<footer>
+  이 페이지는 계산 도구입니다. 투자 판단과 그 결과는 이용자 본인의 몫이며, 어떤 종목의 매수·매도 권유도 아닙니다.
+</footer>
+
+</div>
+
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+
+  function fmtWon(n){ return (n==null || !isFinite(n)) ? '—' : Math.round(n).toLocaleString('ko-KR') + '원'; }
+  function fmtPct(n, d){ return (n==null || !isFinite(n)) ? '—' : (n>=0?'+':'') + n.toFixed(d==null?1:d) + '%'; }
+  function fmtRatio(n){ return (n==null || !isFinite(n)) ? '—' : n.toFixed(2) + '배'; }
+
+  function status(msg, kind){
+    var el = $('status');
+    el.className = 'fstatus' + (kind ? ' ' + kind : '');
+    el.textContent = msg;
+  }
+
+  $('btnScan').addEventListener('click', function(){
+    var qs = new URLSearchParams({
+      n: $('n').value,
+      regime: $('regime').value,
+      kbase: $('kbase').value,
+      minGap: $('minGap').value,
+      minFlow: (Number($('minFlow').value) / 100), // %를 비율로
+      minVolRatio: $('minVolRatio').value,
+      flowDays: $('flowDays').value,
+    });
+    status('스캔 중입니다… 유니버스가 크면 1~2분 정도 걸릴 수 있습니다.', 'busy');
+    $('resultSec').style.display = 'none';
+    $('runnerSec').style.display = 'none';
+
+    fetch('/api/screen?' + qs.toString()).then(function(r){
+      return r.json().then(function(j){
+        if(!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        return j;
+      });
+    }).then(render).catch(function(e){
+      status('스캔에 실패했습니다 — ' + e.message, 'err');
+    });
+  });
+
+  function render(d){
+    status(d.date + ' 종가 기준 · 유니버스 ' + d.universeSize + '종목 · 검토 ' + d.consideredCount
+      + '종목(데이터 부족 제외 ' + d.skippedCount + ') · 조건 통과 ' + d.passedCount + '종목');
+
+    $('resultSec').style.display = 'block';
+    $('scanMeta').textContent = d.date + ' 종가 기준';
+
+    if(!d.candidates.length){
+      $('cards').innerHTML = '';
+      $('emptyMsg').style.display = 'block';
+    } else {
+      $('emptyMsg').style.display = 'none';
+      $('cards').innerHTML = d.candidates.map(function(c, i){
+        return '<div class="cand"><div class="rank">' + (i+1) + '순위</div>'
+          + '<h3>' + c.name + ' <span class="code">' + c.code + '</span></h3>'
+          + '<div class="gap">' + fmtPct(c.gapPct) + '</div>'
+          + '<div class="metric"><span>현재가</span><span>' + fmtWon(c.price) + '</span></div>'
+          + '<div class="metric"><span>적정주가</span><span>' + fmtWon(c.fairPrice) + '</span></div>'
+          + '<div class="metric"><span>수급강도</span><span>' + fmtPct(c.flowStrength*100, 1) + '</span></div>'
+          + '<div class="metric"><span>거래량비율</span><span>' + fmtRatio(c.volumeRatio) + '</span></div>'
+          + '</div>';
+      }).join('');
+    }
+
+    if(d.runnerUps && d.runnerUps.length){
+      $('runnerSec').style.display = 'block';
+      $('runnerTable').innerHTML = d.runnerUps.map(function(c){
+        return '<tr><td>' + c.name + ' (' + c.code + ')</td><td>' + fmtWon(c.price) + '</td>'
+          + '<td>' + fmtWon(c.fairPrice) + '</td><td>' + fmtPct(c.gapPct) + '</td>'
+          + '<td>' + fmtPct(c.flowStrength*100,1) + '</td><td>' + fmtRatio(c.volumeRatio) + '</td></tr>';
+      }).join('');
+    } else {
+      $('runnerSec').style.display = 'none';
+    }
+  }
+})();
+</script>
+</body>
+</html>
