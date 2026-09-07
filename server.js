@@ -755,9 +755,9 @@ app.get('/api/screen', checkStatsAuth, async (req, res) => {
     universeN: Math.min(300, Math.max(10, Number(req.query.n) || 100)),
     regime: ['up', 'flat', 'down'].includes(req.query.regime) ? req.query.regime : 'flat',
     kbasePct: Number(req.query.kbase) || 4.64, // 기본: AA등급 5년물 — 대형주 위주 유니버스 기준
-    minGapPct: Math.max(0, Number(req.query.minGap) || 20),
-    minFlowStrength: Math.max(0, Number(req.query.minFlow) || 0.05),
-    minVolumeRatio: Math.max(1, Number(req.query.minVolRatio) || 1.3),
+    minGapPct: Math.max(0, Number(req.query.minGap) || 15),
+    minFlowStrength: Math.max(0, Number(req.query.minFlow) || 0.03),
+    minVolumeRatio: Math.max(1, Number(req.query.minVolRatio) || 1.05),
     flowDays: Math.min(20, Math.max(1, Number(req.query.flowDays) || 5)),
   };
   try {
