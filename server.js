@@ -1042,8 +1042,18 @@ app.get('/api/health', (_, res) => res.json({ ok: true, cache: cache.size, at: n
  * 새로 하나 더 만들어도 된다 — 키 이름이 겹치지 않아 서로 방해하지 않는다.
  */
 
-const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL;
-const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+// 콘솔 화면 값을 따옴표째로 복사해 붙여넣는 실수가 흔해서(예: "https://x.upstash.io"),
+// 앞뒤 공백과 감싸는 따옴표(' 또는 ")를 자동으로 벗겨낸다.
+function cleanEnv(raw) {
+  if (!raw) return raw;
+  let v = raw.trim();
+  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+    v = v.slice(1, -1).trim();
+  }
+  return v;
+}
+const UPSTASH_URL = cleanEnv(process.env.UPSTASH_REDIS_REST_URL);
+const UPSTASH_TOKEN = cleanEnv(process.env.UPSTASH_REDIS_REST_TOKEN);
 const BOOT_SALT = crypto.randomBytes(16).toString('hex'); // VISIT_SALT 미설정 시 임시로 씀 (재시작마다 바뀜)
 
 async function redisCmd(...args) {
