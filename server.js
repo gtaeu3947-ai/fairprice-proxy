@@ -634,6 +634,12 @@ function percentileRanks(values) {
   return ranks;
 }
 
+// ROE가 요구수익률을 이 정도(%p) 이내로만 넘으면 "경계선"으로 본다.
+// 상승장(w=1)에서는 이런 종목일수록 요구수익률 가정을 조금만 바꿔도
+// 적정주가가 크게 흔들린다 — 실제로 신용등급 기본값을 BBB-에서 AA로
+// 바꾸자 결과가 통째로 달라진 종목들이 있어서 넣은 안전장치다.
+const THIN_MARGIN_PCT = 3;
+
 async function screenOne(item, opt) {
   try {
     const [fund, flow] = await Promise.all([
@@ -650,6 +656,7 @@ async function screenOne(item, opt) {
     }
     const gap = gapPct(fund.price, fv.fairPrice);
     const flowOk = flow.hasData && flow.flowStrength != null && flow.volumeRatio != null;
+    const marginPct = Math.round((fv.roeW - fv.k * 100) * 100) / 100;
 
     return {
       code: item.code,
@@ -662,6 +669,8 @@ async function screenOne(item, opt) {
       flowSum: flow.flowSum,
       flowDataAvailable: flowOk,
       undervalued: gap != null && gap < 0,
+      marginPct,
+      thinMargin: marginPct < THIN_MARGIN_PCT,
     };
   } catch (e) {
     return { code: item.code, name: item.name, skipped: e.message };
