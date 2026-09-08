@@ -737,34 +737,68 @@ async function runScreen(opt) {
   // 그래서 절대 기준(최소 저평가폭 등)은 "켜고 싶으면 켜는" 선택적 사전 필터로만 쓰고,
   // 그 필터를 통과한 종목들 안에서는 세 지표를 각각 백분위로 바꿔 가중합한 점수로
   // 순위를 매긴다 — 매일 "그나마 제일 나은 3개"가 나오게 하려는 목적이다.
-  const pool = scored.filter(r =>
-    r.undervalued &&
-    r.gapPct <= -opt.minGapPct &&
-    r.flowDataAvailable &&
-    r.flowStrength >= opt.minFlowStrength &&
-    r.volumeRatio >= opt.minVolumeRatio
-  );
-
-  const pGap = percentileRanks(pool.map(r => -r.gapPct));      // 클수록 더 저평가
-  const pFlow = percentileRanks(pool.map(r => r.flowStrength));
-  const pVol = percentileRanks(pool.map(r => r.volumeRatio));
-  pool.forEach((r, i) => {
-    r.score = opt.weightGap * pGap[i] + opt.weightFlow * pFlow[i] + opt.weightVolume * pVol[i];
-    r.score = Math.round(r.score * 1000) / 1000;
-  });
-  pool.sort((a, b) => b.score - a.score); // 점수 높은 순
-
-  const out = {
-    date: today,
-    universeSize: universe.length,
-    consideredCount: scored.length,
-    skippedCount,
-    passedCount: pool.length,
-    funnel,
-    candidates: pool.slice(0, 3),
-    runnerUps: pool.slice(3, 13), // 참고용으로 좀 더 보여줌
-    opt,
+  //
+  // 코스피+코스닥을 한 유니버스로 합쳐서 매기면, 그날그날 우연히 한쪽 시장이
+  // TOP3를 싹쓸이할 수 있다(코스닥 종목이 하나도 안 뽑히는 날이 있었다).
+  // market이 'ALL'이면 이 함수를 시장별로 따로 호출해서 각자 TOP3를 뽑는다.
+  const rankPool = (list) => {
+    const filtered = list.filter(r =>
+      r.undervalued &&
+      r.gapPct <= -opt.minGapPct &&
+      r.flowDataAvailable &&
+      r.flowStrength >= opt.minFlowStrength &&
+      r.volumeRatio >= opt.minVolumeRatio
+    );
+    const pGap = percentileRanks(filtered.map(r => -r.gapPct));      // 클수록 더 저평가
+    const pFlow = percentileRanks(filtered.map(r => r.flowStrength));
+    const pVol = percentileRanks(filtered.map(r => r.volumeRatio));
+    filtered.forEach((r, i) => {
+      r.score = opt.weightGap * pGap[i] + opt.weightFlow * pFlow[i] + opt.weightVolume * pVol[i];
+      r.score = Math.round(r.score * 1000) / 1000;
+    });
+    filtered.sort((a, b) => b.score - a.score); // 점수 높은 순
+    return filtered;
   };
+
+  let out;
+  if (opt.market === 'ALL') {
+    const poolKospi = rankPool(scored.filter(r => r.market === 'KOSPI'));
+    const poolKosdaq = rankPool(scored.filter(r => r.market === 'KOSDAQ'));
+    const candidatesKospi = poolKospi.slice(0, 3);
+    const candidatesKosdaq = poolKosdaq.slice(0, 3);
+    out = {
+      date: today,
+      universeSize: universe.length,
+      consideredCount: scored.length,
+      skippedCount,
+      passedCount: poolKospi.length + poolKosdaq.length,
+      funnel,
+      candidatesKospi,
+      candidatesKosdaq,
+      runnerUpsKospi: poolKospi.slice(3, 13),
+      runnerUpsKosdaq: poolKosdaq.slice(3, 13),
+      // 코스피/코스닥 구분 없이 보고 싶을 때를 위해 합친 것도 같이 준다.
+      // 성과검증에 기록되는 것도 이 합쳐진 목록이라, 시장 통합으로 스캔하면
+      // 코스피 TOP3 + 코스닥 TOP3가 함께(최대 6종목) 추천 기록에 남는다.
+      candidates: [...candidatesKospi, ...candidatesKosdaq],
+      runnerUps: [...poolKospi.slice(3, 13), ...poolKosdaq.slice(3, 13)],
+      opt,
+    };
+  } else {
+    const pool = rankPool(scored);
+    out = {
+      date: today,
+      universeSize: universe.length,
+      consideredCount: scored.length,
+      skippedCount,
+      passedCount: pool.length,
+      funnel,
+      candidates: pool.slice(0, 3),
+      runnerUps: pool.slice(3, 13), // 참고용으로 좀 더 보여줌
+      opt,
+    };
+  }
+
   // 성과검증은 부가 기능이다 — 여기서 실패해도(Upstash 설정 오류 등) 스캔 결과 자체는
   // 정상적으로 돌려줘야 한다. 실패는 조용히 넘어가되, 원인 파악용으로 콘솔에는 남긴다.
   try {
