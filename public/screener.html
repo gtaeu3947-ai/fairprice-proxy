@@ -122,7 +122,15 @@
   <div class="panel">
     <div class="grid">
       <div class="f">
-        <label for="n">유니버스 (코스피 시가총액 상위)</label>
+        <label for="market">대상 시장</label>
+        <select id="market">
+          <option value="KOSPI">코스피만</option>
+          <option value="KOSDAQ">코스닥만</option>
+          <option value="ALL" selected>코스피+코스닥</option>
+        </select>
+      </div>
+      <div class="f">
+        <label for="n">유니버스 (시가총액 상위)</label>
         <input id="n" type="number" value="100" min="10" max="300" step="10">
       </div>
       <div class="f">
@@ -225,7 +233,7 @@
     <summary>한계와 주의사항</summary>
     <div class="dbody">
       <ul>
-        <li>유니버스는 코스피 시가총액 상위 종목만 대상입니다(코스닥 미포함). 순위가 바뀌는 종목이나 상위권 밖 종목은 애초에 스캔 대상이 아닙니다.</li>
+        <li>유니버스는 시가총액 상위 종목만 대상입니다. 순위가 바뀌는 종목이나 상위권 밖 종목은 애초에 스캔 대상이 아닙니다. "코스피+코스닥"을 고르면 각 시장 안에서의 순위를 절반씩 가져와 섞는 것이라, 실제 통합 시가총액 순위와는 다릅니다 — 코스닥 1위 기업도 코스피 중위권보다 시가총액이 작은 경우가 많습니다.</li>
         <li>"수급강도"는 기관·외국인의 순매수 흔적을 보는 것이지, 실제로 특정 세력이 개입했는지를 확인하는 지표가 아닙니다. 우연히 조건을 만족한 것일 수 있습니다.</li>
         <li>기준 요구수익률을 유니버스 전체에 동일하게 적용하기 때문에, 실제 신용등급이 낮은 기업은 저평가 폭이 과장되게 나올 수 있습니다.</li>
         <li>같은 날짜에는 캐시된 결과가 재사용됩니다. 조건(유니버스 크기·국면·임계값 등)을 바꾸면 새로 스캔합니다.</li>
@@ -258,6 +266,7 @@
   $('btnScan').addEventListener('click', function(){
     var qs = new URLSearchParams({
       n: $('n').value,
+      market: $('market').value,
       regime: $('regime').value,
       kbase: $('kbase').value,
       minGap: $('minGap').value,
@@ -306,7 +315,7 @@
           + '⚠ ROE가 요구수익률을 ' + c.marginPct.toFixed(1) + '%p밖에 안 넘음 — 가정에 민감한 결과</div>'
           : '';
         return '<div class="cand"><div class="rank">' + (i+1) + '순위 · 점수 ' + (c.score*100).toFixed(0) + '</div>'
-          + '<h3>' + c.name + ' <span class="code">' + c.code + '</span></h3>'
+          + '<h3>' + c.name + ' <span class="code">' + c.code + (c.market ? ' · ' + c.market : '') + '</span></h3>'
           + warn
           + '<div class="gap">' + fmtPct(c.gapPct) + '</div>'
           + '<div class="metric"><span>현재가</span><span>' + fmtWon(c.price) + '</span></div>'
