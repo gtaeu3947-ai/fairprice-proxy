@@ -206,8 +206,12 @@
 </section>
 
 <section id="resultSec" style="display:none">
-  <div class="stitle"><h2>TOP 3</h2><span id="scanMeta"></span></div>
+  <div class="stitle"><h2 id="topTitle">TOP 3</h2><span id="scanMeta"></span></div>
   <div id="cards" class="cards"></div>
+  <div id="kosdaqSec" style="display:none">
+    <div class="stitle" style="margin-top:18px"><h2>코스닥 TOP 3</h2></div>
+    <div id="cardsKosdaq" class="cards"></div>
+  </div>
   <p class="empty" id="emptyMsg" style="display:none">저평가 상태이면서 수급 데이터가 있는 종목이 하나도 없습니다. 선택적 필터를 켜두셨다면 꺼보시거나, 유니버스를 넓혀 보세요.</p>
 </section>
 
@@ -271,7 +275,7 @@
     <summary>한계와 주의사항</summary>
     <div class="dbody">
       <ul>
-        <li>유니버스는 시가총액 상위 종목만 대상입니다. 순위가 바뀌는 종목이나 상위권 밖 종목은 애초에 스캔 대상이 아닙니다. "코스피+코스닥"을 고르면 각 시장 안에서의 순위를 절반씩 가져와 섞는 것이라, 실제 통합 시가총액 순위와는 다릅니다 — 코스닥 1위 기업도 코스피 중위권보다 시가총액이 작은 경우가 많습니다.</li>
+        <li>유니버스는 시가총액 상위 종목만 대상입니다. 순위가 바뀌는 종목이나 상위권 밖 종목은 애초에 스캔 대상이 아닙니다. "코스피+코스닥"을 고르면 유니버스 자체는 각 시장 시가총액 상위를 절반씩 가져오고(코스닥 1위 기업도 코스피 중위권보다 시가총액이 작은 경우가 많아, 시가총액만 놓고 보면 실제 통합 순위는 아닙니다), 다만 <b>점수 순위는 두 시장을 섞지 않고 따로 매겨서</b> 코스피 TOP3·코스닥 TOP3를 각각 보여줍니다 — 그날 한쪽 시장 점수가 전반적으로 높아도 다른 쪽이 아예 안 뽑히는 일은 없습니다.</li>
         <li>"수급강도"는 기관·외국인의 순매수 흔적을 보는 것이지, 실제로 특정 세력이 개입했는지를 확인하는 지표가 아닙니다. 우연히 조건을 만족한 것일 수 있습니다.</li>
         <li>기준 요구수익률을 유니버스 전체에 동일하게 적용하기 때문에, 실제 신용등급이 낮은 기업은 저평가 폭이 과장되게 나올 수 있습니다.</li>
         <li>같은 날짜에는 캐시된 결과가 재사용됩니다. 조건(유니버스 크기·국면·임계값 등)을 바꾸면 새로 스캔합니다.</li>
@@ -341,34 +345,48 @@
     $('resultSec').style.display = 'block';
     $('scanMeta').textContent = d.date + ' 종가 기준';
 
-    if(!d.candidates.length){
-      $('cards').innerHTML = '';
-      $('emptyMsg').style.display = 'block';
+    function cardHtml(c, i){
+      var warn = c.thinMargin
+        ? '<div style="margin:2px 0 8px;padding:5px 8px;background:#FDF1EC;border:1px solid #F0C9B8;'
+        + 'border-radius:6px;color:#7A2E10;font-size:11.5px;font-weight:600">'
+        + '⚠ ROE가 요구수익률을 ' + c.marginPct.toFixed(1) + '%p밖에 안 넘음 — 가정에 민감한 결과</div>'
+        : '';
+      return '<div class="cand"><div class="rank">' + (i+1) + '순위 · 점수 ' + (c.score*100).toFixed(0) + '</div>'
+        + '<h3>' + c.name + ' <span class="code">' + c.code + (c.market ? ' · ' + c.market : '') + '</span></h3>'
+        + warn
+        + '<div class="gap">' + fmtPct(c.gapPct) + '</div>'
+        + '<div class="metric"><span>현재가</span><span>' + fmtWon(c.price) + '</span></div>'
+        + '<div class="metric"><span>적정주가</span><span>' + fmtWon(c.fairPrice) + '</span></div>'
+        + '<div class="metric"><span>수급강도</span><span>' + fmtPct(c.flowStrength*100, 1) + '</span></div>'
+        + '<div class="metric"><span>거래량비율</span><span>' + fmtRatio(c.volumeRatio) + '</span></div>'
+        + '</div>';
+    }
+    function cardsHtml(list){ return list.map(cardHtml).join(''); }
+
+    if(d.candidatesKospi){
+      // 대상 시장이 "코스피+코스닥"이면 한쪽이 TOP3를 싹쓸이하지 않도록 시장별로 따로 뽑는다.
+      $('topTitle').textContent = '코스피 TOP 3';
+      $('kosdaqSec').style.display = 'block';
+      $('cards').innerHTML = cardsHtml(d.candidatesKospi);
+      $('cardsKosdaq').innerHTML = cardsHtml(d.candidatesKosdaq);
+      $('emptyMsg').style.display = (d.candidatesKospi.length || d.candidatesKosdaq.length) ? 'none' : 'block';
     } else {
-      $('emptyMsg').style.display = 'none';
-      $('cards').innerHTML = d.candidates.map(function(c, i){
-        var warn = c.thinMargin
-          ? '<div style="margin:2px 0 8px;padding:5px 8px;background:#FDF1EC;border:1px solid #F0C9B8;'
-          + 'border-radius:6px;color:#7A2E10;font-size:11.5px;font-weight:600">'
-          + '⚠ ROE가 요구수익률을 ' + c.marginPct.toFixed(1) + '%p밖에 안 넘음 — 가정에 민감한 결과</div>'
-          : '';
-        return '<div class="cand"><div class="rank">' + (i+1) + '순위 · 점수 ' + (c.score*100).toFixed(0) + '</div>'
-          + '<h3>' + c.name + ' <span class="code">' + c.code + (c.market ? ' · ' + c.market : '') + '</span></h3>'
-          + warn
-          + '<div class="gap">' + fmtPct(c.gapPct) + '</div>'
-          + '<div class="metric"><span>현재가</span><span>' + fmtWon(c.price) + '</span></div>'
-          + '<div class="metric"><span>적정주가</span><span>' + fmtWon(c.fairPrice) + '</span></div>'
-          + '<div class="metric"><span>수급강도</span><span>' + fmtPct(c.flowStrength*100, 1) + '</span></div>'
-          + '<div class="metric"><span>거래량비율</span><span>' + fmtRatio(c.volumeRatio) + '</span></div>'
-          + '</div>';
-      }).join('');
+      $('topTitle').textContent = 'TOP 3';
+      $('kosdaqSec').style.display = 'none';
+      if(!d.candidates.length){
+        $('cards').innerHTML = '';
+        $('emptyMsg').style.display = 'block';
+      } else {
+        $('emptyMsg').style.display = 'none';
+        $('cards').innerHTML = cardsHtml(d.candidates);
+      }
     }
 
     if(d.runnerUps && d.runnerUps.length){
       $('runnerSec').style.display = 'block';
       $('runnerTable').innerHTML = d.runnerUps.map(function(c){
         var mark = c.thinMargin ? ' ⚠' : '';
-        return '<tr><td>' + c.name + mark + ' (' + c.code + ')</td><td>' + (c.score*100).toFixed(0) + '</td><td>' + fmtWon(c.price) + '</td>'
+        return '<tr><td>' + c.name + mark + ' (' + c.code + (c.market ? ' · ' + c.market : '') + ')</td><td>' + (c.score*100).toFixed(0) + '</td><td>' + fmtWon(c.price) + '</td>'
           + '<td>' + fmtWon(c.fairPrice) + '</td><td>' + fmtPct(c.gapPct) + '</td>'
           + '<td>' + fmtPct(c.flowStrength*100,1) + '</td><td>' + fmtRatio(c.volumeRatio) + '</td></tr>';
       }).join('');
