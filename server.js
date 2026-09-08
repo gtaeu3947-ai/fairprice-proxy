@@ -492,8 +492,9 @@ app.get('/api/history/:code', async (req, res) => {
  * 컬럼 구성이 바뀌어도 이 링크 패턴은 잘 안 바뀐다.
  */
 
-async function fetchMarketCapPage(page) {
-  const url = `https://finance.naver.com/sise/sise_market_sum.naver?sosok=0&page=${page}`;
+async function fetchMarketCapPage(page, sosok) {
+  sosok = sosok === 1 ? 1 : 0; // 0=코스피, 1=코스닥
+  const url = `https://finance.naver.com/sise/sise_market_sum.naver?sosok=${sosok}&page=${page}`;
   const html = await fetchHtml(url);
   const $ = cheerio.load(html);
   const out = [];
@@ -512,15 +513,17 @@ async function fetchMarketCapPage(page) {
   return out;
 }
 
-async function fetchMarketCapUniverse(n) {
-  const cacheKey = 'universe:kospi:' + n;
+// 단일 시장(코스피 또는 코스닥) 안에서 시가총액 상위 n개를 모은다.
+async function fetchMarketCapSingle(n, sosok) {
+  const marketName = sosok === 1 ? 'kosdaq' : 'kospi';
+  const cacheKey = 'universe:' + marketName + ':' + n;
   const cached = histCacheGet(cacheKey); // 하루 단위로 바뀌어도 무방 — 12시간 캐시 재사용
   if (cached) return cached;
 
   const perPage = 50;
   const pages = Math.ceil(n / perPage);
   const results = await Promise.all(
-    Array.from({ length: pages }, (_, i) => fetchMarketCapPage(i + 1).catch(() => []))
+    Array.from({ length: pages }, (_, i) => fetchMarketCapPage(i + 1, sosok).catch(() => []))
   );
   const seen = new Set();
   const merged = [];
@@ -528,12 +531,33 @@ async function fetchMarketCapUniverse(n) {
     for (const r of rows) {
       if (seen.has(r.code)) continue;
       seen.add(r.code);
-      merged.push(r);
+      merged.push({ ...r, market: marketName === 'kosdaq' ? 'KOSDAQ' : 'KOSPI' });
     }
   }
   const out = merged.slice(0, n);
   histCacheSet(cacheKey, out);
   return out;
+}
+
+/**
+ * market: 'KOSPI'(기본) | 'KOSDAQ' | 'ALL'.
+ * 'ALL'은 진짜 통합 시가총액 순위가 아니다 — 코스피·코스닥 각 시장 안에서의
+ * 순위를 절반씩 가져와 이어붙인 것이다(코스닥은 1위 기업도 코스피 중위권보다
+ * 작은 경우가 많아서, 시가총액 숫자 자체를 비교해 하나로 재정렬하려면 그 값을
+ * 따로 파싱해야 하는데 여기서는 하지 않는다). "코스닥도 후보에 들어오게"
+ * 하는 목적에는 이 정도로 충분하다.
+ */
+async function fetchMarketCapUniverse(n, market) {
+  market = market === 'KOSDAQ' ? 'KOSDAQ' : market === 'ALL' ? 'ALL' : 'KOSPI';
+  if (market === 'ALL') {
+    const half = Math.ceil(n / 2);
+    const [kospi, kosdaq] = await Promise.all([
+      fetchMarketCapSingle(half, 0),
+      fetchMarketCapSingle(half, 1),
+    ]);
+    return [...kospi, ...kosdaq].slice(0, n);
+  }
+  return fetchMarketCapSingle(n, market === 'KOSDAQ' ? 1 : 0);
 }
 
 /* ───────────────────────── 스크리너: 수급(기관·외국인 순매매) ─────────────────────────
@@ -661,6 +685,7 @@ async function screenOne(item, opt) {
     return {
       code: item.code,
       name: fund.name || item.name,
+      market: item.market || null,
       price: fund.price,
       fairPrice: Math.round(fv.fairPrice),
       gapPct: gap,
@@ -683,7 +708,7 @@ async function runScreen(opt) {
   const cached = histCacheGet(cacheKey);
   if (cached) return cached;
 
-  const universe = await fetchMarketCapUniverse(opt.universeN);
+  const universe = await fetchMarketCapUniverse(opt.universeN, opt.market);
   if (!universe.length) {
     throw new Error('시가총액 순위를 가져오지 못했습니다. 잠시 후 다시 시도하거나 /api/universe-raw로 원본을 확인하십시오.');
   }
@@ -772,8 +797,9 @@ app.get('/api/history-raw/:code', async (req, res) => {
 
 app.get('/api/universe-raw', async (req, res) => {
   const page = Number(req.query.page) || 1;
+  const sosok = req.query.market === 'KOSDAQ' ? 1 : 0;
   try {
-    const url = `https://finance.naver.com/sise/sise_market_sum.naver?sosok=0&page=${page}`;
+    const url = `https://finance.naver.com/sise/sise_market_sum.naver?sosok=${sosok}&page=${page}`;
     res.type('text/plain').send(await fetchHtml(url));
   } catch (e) {
     res.status(502).send(e.message);
@@ -820,6 +846,7 @@ app.get('/api/screen', checkStatsAuth, async (req, res) => {
   );
   const opt = {
     universeN: Math.min(300, Math.max(10, numParam(req.query.n, 100))),
+    market: ['KOSPI', 'KOSDAQ', 'ALL'].includes(req.query.market) ? req.query.market : 'KOSPI',
     regime: ['up', 'flat', 'down'].includes(req.query.regime) ? req.query.regime : 'up',
     kbasePct: numParam(req.query.kbase, 4.64), // 기본: AA등급 5년물 — 대형주 위주 유니버스 기준
     // 이 세 값은 이제 "필수 조건"이 아니라 선택적 사전 필터다. 기본값 0은 "필터 없음"을 뜻한다 —
@@ -1050,5 +1077,5 @@ app.listen(PORT, () => console.log(`fairprice-proxy listening on ${PORT}`));
 module.exports = {
   app, fromNaver, fromFnGuide, toNum, rowByLabel, recordVisit, getStats, kstDate, lastNDays,
   fetchNaverHistoryPage, fetchNaverHistory, getFundamentals, searchByNaverPage,
-  fetchMarketCapPage, fetchMarketCapUniverse, fetchInvestorFlow, screenOne, runScreen, percentileRanks,
+  fetchMarketCapPage, fetchMarketCapSingle, fetchMarketCapUniverse, fetchInvestorFlow, screenOne, runScreen, percentileRanks,
 };
