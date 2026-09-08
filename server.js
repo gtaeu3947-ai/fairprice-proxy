@@ -851,7 +851,7 @@ async function recordRecommendation(date, opt, candidates) {
     })),
   };
   if (hasRedis()) {
-    await redisCmd('SET', 'reco:' + date, JSON.stringify(payload));
+    await redisSetBody('reco:' + date, JSON.stringify(payload));
     await redisCmd('SADD', 'reco:dates', date);
   } else {
     RECO_MEM.set(date, payload);
@@ -1065,6 +1065,24 @@ const BOOT_SALT = crypto.randomBytes(16).toString('hex'); // VISIT_SALT 미설�
 async function redisCmd(...args) {
   const path = args.map(a => encodeURIComponent(String(a))).join('/');
   const r = await fetch(`${UPSTASH_URL}/${path}`, { headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` } });
+  if (!r.ok) throw new Error(`Upstash ${r.status}`);
+  const j = await r.json();
+  return j.result;
+}
+
+/**
+ * SET처럼 값 자체가 복잡한(JSON 문자열 등, 중괄호·따옴표·콜론이 잔뜩 든) 경우 쓴다.
+ * 값을 URL 경로에 욱여넣으면(redisCmd처럼) 인코딩이 왕복하면서 깨지는 경우가 있었다
+ * (실제로 겪음 — 저장은 되는데 불러오면 URL 인코딩된 문자열 그대로 나옴).
+ * Upstash REST API가 지원하는 대로, 명령어와 키만 경로에 넣고 값은 요청 본문에 실어 보낸다.
+ */
+async function redisSetBody(key, value) {
+  const path = ['SET', key].map(a => encodeURIComponent(String(a))).join('/');
+  const r = await fetch(`${UPSTASH_URL}/${path}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${UPSTASH_TOKEN}`, 'Content-Type': 'text/plain' },
+    body: String(value),
+  });
   if (!r.ok) throw new Error(`Upstash ${r.status}`);
   const j = await r.json();
   return j.result;
