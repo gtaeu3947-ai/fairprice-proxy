@@ -765,6 +765,7 @@ async function runScreen(opt) {
     runnerUps: pool.slice(3, 13), // 참고용으로 좀 더 보여줌
     opt,
   };
+  await recordRecommendation(today, opt, out.candidates);
   histCacheSet(cacheKey, out);
   return out;
 }
@@ -814,6 +815,139 @@ app.get('/api/flow-raw/:code', async (req, res) => {
     res.type('text/plain').send(`HTTP ${r.status}\n\n` + await r.text());
   } catch (e) {
     res.status(502).send(e.message);
+  }
+});
+
+/* ───────────────────────── 스크리너: 성과검증 ─────────────────────────
+ *
+ * 스캔이 실제로 TOP3를 냈으면(candidates.length>0), 그날의 추천 내역을
+ * "reco:날짜" 키로 남겨둔다 — 나중에 "그날 샀으면 지금 몇 %냐"를 계산하려면
+ * 그날 실제로 뭘 추천했는지가 남아있어야 하기 때문이다. 방문자 통계와 같은
+ * Upstash Redis를 재사용한다(둘 다 redisCmd/hasRedis). Upstash가 없으면
+ * 메모리에만 남는데, 이 경우 서버 재시작(Render 무료 플랜은 15분 무접속 시
+ * 재시작)마다 과거 추천 이력이 사라진다 — 성과검증 기능은 이 저장이 있어야
+ * 의미가 있으므로, 방문자 통계보다도 Upstash 설정이 더 중요하다.
+ *
+ * 하루에 스캔을 여러 번(조건을 바꿔가며) 돌릴 수도 있으니, 그날 마지막으로
+ * TOP3가 나온 스캔 결과로 그날 기록을 덮어쓴다 — "그날의 공식 추천"은
+ * 하나만 남기는 식이다.
+ */
+
+const RECO_MEM = new Map(); // Upstash 없을 때 쓰는 메모리 저장소: date -> {date, opt, candidates}
+
+async function recordRecommendation(date, opt, candidates) {
+  if (!candidates || !candidates.length) return;
+  const payload = {
+    date, opt,
+    candidates: candidates.map(c => ({
+      code: c.code, name: c.name, market: c.market || null,
+      price: c.price, fairPrice: c.fairPrice, gapPct: c.gapPct, score: c.score,
+    })),
+  };
+  if (hasRedis()) {
+    await redisCmd('SET', 'reco:' + date, JSON.stringify(payload));
+    await redisCmd('SADD', 'reco:dates', date);
+  } else {
+    RECO_MEM.set(date, payload);
+  }
+}
+
+async function getRecommendation(date) {
+  if (hasRedis()) {
+    const raw = await redisCmd('GET', 'reco:' + date);
+    return raw ? JSON.parse(raw) : null;
+  }
+  return RECO_MEM.get(date) || null;
+}
+
+async function listRecommendationDates() {
+  if (hasRedis()) {
+    const dates = await redisCmd('SMEMBERS', 'reco:dates');
+    return (dates || []).slice().sort().reverse();
+  }
+  return [...RECO_MEM.keys()].sort().reverse();
+}
+
+/**
+ * 종목 하나의 "조회일 기준 가격"을 구한다.
+ * 조회일이 오늘이면 실시간 현재가(getFundamentals), 과거 날짜면 그 날짜
+ * 이전 중 가장 가까운 거래일 종가(fetchNaverHistory)를 쓴다 — 조회일이
+ * 주말·공휴일이면 그 앞의 마지막 거래일 값으로 대체된다는 뜻이다.
+ */
+async function priceAsOf(code, asOfDate) {
+  const today = kstDate();
+  if (asOfDate >= today) {
+    const fund = await getFundamentals(code);
+    return { price: fund.price, actualDate: today, isLive: true };
+  }
+  const series = await fetchNaverHistory(code, asOfDate.slice(0, 8) + '01'); // 여유 있게 그 달 초부터
+  const upTo = series.filter(r => r.date <= asOfDate);
+  if (!upTo.length) return { price: null, actualDate: null, isLive: false };
+  const last = upTo[upTo.length - 1];
+  return { price: last.close, actualDate: last.date, isLive: false };
+}
+
+async function computePerformance(recoDate, asOfDate, selectedCodes) {
+  const reco = await getRecommendation(recoDate);
+  if (!reco) {
+    const e = new Error('그 날짜의 추천 기록이 없습니다. /api/performance/dates로 기록이 있는 날짜를 확인하십시오.');
+    e.notFound = true;
+    throw e;
+  }
+  const wantAll = !selectedCodes || !selectedCodes.length;
+  const stocks = await Promise.all(reco.candidates.map(async (c) => {
+    const selected = wantAll || selectedCodes.includes(c.code);
+    const base = {
+      code: c.code, name: c.name, market: c.market, score: c.score,
+      recoPrice: c.price, gapPctAtReco: c.gapPct, selected,
+    };
+    if (!selected) return { ...base, asOfPrice: null, asOfActualDate: null, returnPct: null };
+    try {
+      const asOf = await priceAsOf(c.code, asOfDate);
+      const returnPct = (asOf.price != null && c.price > 0)
+        ? Math.round((asOf.price / c.price - 1) * 10000) / 100
+        : null;
+      return { ...base, asOfPrice: asOf.price, asOfActualDate: asOf.actualDate, returnPct };
+    } catch (e) {
+      return { ...base, asOfPrice: null, asOfActualDate: null, returnPct: null, error: e.message };
+    }
+  }));
+
+  const withReturn = stocks.filter(s => s.selected && s.returnPct != null);
+  const portfolioReturnPct = withReturn.length
+    ? Math.round((withReturn.reduce((s, x) => s + x.returnPct, 0) / withReturn.length) * 100) / 100
+    : null;
+
+  return {
+    recoDate, asOfDate,
+    recoOpt: reco.opt,
+    stocks,
+    selectedCodes: wantAll ? stocks.map(s => s.code) : selectedCodes,
+    portfolioReturnPct,
+  };
+}
+
+app.get('/api/performance/dates', checkStatsAuth, async (req, res) => {
+  try {
+    res.json({ dates: await listRecommendationDates(), persisted: hasRedis() });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
+app.get('/api/performance', checkStatsAuth, async (req, res) => {
+  const recoDate = String(req.query.date || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(recoDate)) {
+    return res.status(400).json({ error: '?date=YYYY-MM-DD 형식으로 추천일을 지정하십시오.' });
+  }
+  const asOfDate = /^\d{4}-\d{2}-\d{2}$/.test(req.query.asOf || '') ? req.query.asOf : kstDate();
+  const selectedCodes = req.query.codes
+    ? String(req.query.codes).split(',').map(s => s.trim()).filter(Boolean)
+    : null;
+  try {
+    res.json(await computePerformance(recoDate, asOfDate, selectedCodes));
+  } catch (e) {
+    res.status(e.notFound ? 404 : 502).json({ error: e.message });
   }
 });
 
@@ -1078,4 +1212,5 @@ module.exports = {
   app, fromNaver, fromFnGuide, toNum, rowByLabel, recordVisit, getStats, kstDate, lastNDays,
   fetchNaverHistoryPage, fetchNaverHistory, getFundamentals, searchByNaverPage,
   fetchMarketCapPage, fetchMarketCapSingle, fetchMarketCapUniverse, fetchInvestorFlow, screenOne, runScreen, percentileRanks,
+  recordRecommendation, getRecommendation, listRecommendationDates, priceAsOf, computePerformance,
 };
