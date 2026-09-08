@@ -167,7 +167,7 @@
   <h1>상황별 적정주가 계산기 <span style="color:var(--ink-3);font-weight:600">국면 대응판</span></h1>
   <p class="sub">같은 기업이라도 상승장·횡보장·하락장에서 요구수익률과 초과이익 지속 가정이 달라집니다. 세 국면의 적정주가를 한 화면에서 비교하고, 국면에 맞는 매수 구간까지 계산합니다.</p>
   <div class="memo">
-    <b>시장 메모 (2026-09-03 기준)</b> — 코스피 6,579.48. 7월 8,000선이 무너진 뒤 6,000~7,000 박스권에서 등락 중이고, 미국발 장기금리 급등이 지수 상단을 누르고 있습니다. 기본 국면은 <b>횡보장</b>으로 맞춰두었습니다. 금리가 오르면 요구수익률(할인율)도 같이 올려야 적정주가가 과대평가되지 않습니다.
+    <b>시장 메모 (2026-09-08 기준)</b> — 코스피가 전날(9/7) 4.61% 급등해 6,995.48로 마감한 데 이어, 오늘 개장과 동시에 7,000선을 돌파했습니다(8월 18일 이후 15거래일 만). 오픈AI 신모델 발 메모리 수요 기대로 삼성전자·SK하이닉스 등 반도체 대형주가 랠리를 이끌고 있고, 기관 매수세도 유입되는 모습입니다. 그동안의 6,000~7,000 박스권이 위로 뚫린 모양새라 기본 국면을 <b>상승장</b>으로 바꿔두었습니다. 다만 하루 급등 이후라 변동성이 클 수 있으니, 되돌림이 나오면 국면을 다시 조정하세요.
   </div>
 </header>
 
@@ -260,8 +260,8 @@
 <section>
   <div class="stitle"><h2>2. 시장 국면</h2><span>국면에 따라 할인율과 이익 지속 가정이 바뀝니다</span></div>
   <div class="regimes">
-    <button class="rbtn" data-r="up" aria-pressed="false">상승장<small>추세 상단, 이익 눈높이 상향</small></button>
-    <button class="rbtn" data-r="flat" aria-pressed="true">횡보장<small>박스권, 방향성 없음</small></button>
+    <button class="rbtn" data-r="up" aria-pressed="true">상승장<small>추세 상단, 이익 눈높이 상향</small></button>
+    <button class="rbtn" data-r="flat" aria-pressed="false">횡보장<small>박스권, 방향성 없음</small></button>
     <button class="rbtn" data-r="down" aria-pressed="false">하락장<small>추세 이탈, 이익 추정 하향</small></button>
   </div>
 
@@ -432,7 +432,7 @@
 <script>
 (function(){
   var $ = function(id){ return document.getElementById(id); };
-  var regime = 'flat';
+  var regime = 'up';
   var LABEL = { up:'상승장', flat:'횡보장', down:'하락장' };
   var basket = [];
 
