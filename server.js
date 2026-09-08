@@ -619,6 +619,21 @@ async function fetchInvestorFlow(code, days) {
 
 const SCREEN_BATCH = 8;
 
+/**
+ * 값 배열을 각 값의 백분위(0~1)로 바꾼다. 제일 작은 값이 0, 제일 큰 값이 1.
+ * 저평가 정도·수급강도·거래량비율처럼 단위가 다른 지표를 하나의 점수로
+ * 합치기 전에, 같은 유니버스 안에서의 "상대적 순위"로 맞추는 용도다.
+ * 값이 1개 이하면 비교 대상이 없으므로 전부 1로 취급한다.
+ */
+function percentileRanks(values) {
+  const n = values.length;
+  if (n <= 1) return values.map(() => 1);
+  const order = values.map((_, i) => i).sort((a, b) => values[a] - values[b]);
+  const ranks = new Array(n);
+  order.forEach((origIdx, sortedPos) => { ranks[origIdx] = sortedPos / (n - 1); });
+  return ranks;
+}
+
 async function screenOne(item, opt) {
   try {
     const [fund, flow] = await Promise.all([
@@ -683,24 +698,37 @@ async function runScreen(opt) {
     passedVolume: scored.filter(r => r.flowDataAvailable && r.volumeRatio >= opt.minVolumeRatio).length,
   };
 
-  const passed = scored.filter(r =>
+  // 저평가·수급강도·거래량비율 세 조건을 전부 동시에 넘겨야 하는 방식(AND 게이트)은
+  // 각 조건을 통과하는 종목군이 우연히 안 겹치면 0개가 나온다 — 실제로 겪은 문제다.
+  // 그래서 절대 기준(최소 저평가폭 등)은 "켜고 싶으면 켜는" 선택적 사전 필터로만 쓰고,
+  // 그 필터를 통과한 종목들 안에서는 세 지표를 각각 백분위로 바꿔 가중합한 점수로
+  // 순위를 매긴다 — 매일 "그나마 제일 나은 3개"가 나오게 하려는 목적이다.
+  const pool = scored.filter(r =>
     r.undervalued &&
     r.gapPct <= -opt.minGapPct &&
     r.flowDataAvailable &&
     r.flowStrength >= opt.minFlowStrength &&
     r.volumeRatio >= opt.minVolumeRatio
   );
-  passed.sort((a, b) => a.gapPct - b.gapPct); // 더 저평가된(더 음수) 순
+
+  const pGap = percentileRanks(pool.map(r => -r.gapPct));      // 클수록 더 저평가
+  const pFlow = percentileRanks(pool.map(r => r.flowStrength));
+  const pVol = percentileRanks(pool.map(r => r.volumeRatio));
+  pool.forEach((r, i) => {
+    r.score = opt.weightGap * pGap[i] + opt.weightFlow * pFlow[i] + opt.weightVolume * pVol[i];
+    r.score = Math.round(r.score * 1000) / 1000;
+  });
+  pool.sort((a, b) => b.score - a.score); // 점수 높은 순
 
   const out = {
     date: today,
     universeSize: universe.length,
     consideredCount: scored.length,
     skippedCount,
-    passedCount: passed.length,
+    passedCount: pool.length,
     funnel,
-    candidates: passed.slice(0, 3),
-    runnerUps: passed.slice(3, 13), // 참고용으로 좀 더 보여줌
+    candidates: pool.slice(0, 3),
+    runnerUps: pool.slice(3, 13), // 참고용으로 좀 더 보여줌
     opt,
   };
   histCacheSet(cacheKey, out);
@@ -770,14 +798,33 @@ app.get('/api/screen', checkStatsAuth, async (req, res) => {
     const n = Number(raw);
     return Number.isFinite(n) ? n : def;
   };
+  // 가중치 세 개가 합쳐서 1이 되게 정규화한다. 셋 다 0 이하면 기본 비중(저평가 50%)으로 되돌린다.
+  const normWeights = (g, f, v) => {
+    const sum = g + f + v;
+    if (!(sum > 0)) return { g: 0.5, f: 0.3, v: 0.2 };
+    return { g: g / sum, f: f / sum, v: v / sum };
+  };
+  const w = normWeights(
+    Math.max(0, numParam(req.query.weightGap, 0.5)),
+    Math.max(0, numParam(req.query.weightFlow, 0.3)),
+    Math.max(0, numParam(req.query.weightVolume, 0.2)),
+  );
   const opt = {
     universeN: Math.min(300, Math.max(10, numParam(req.query.n, 100))),
-    regime: ['up', 'flat', 'down'].includes(req.query.regime) ? req.query.regime : 'flat',
+    regime: ['up', 'flat', 'down'].includes(req.query.regime) ? req.query.regime : 'up',
     kbasePct: numParam(req.query.kbase, 4.64), // 기본: AA등급 5년물 — 대형주 위주 유니버스 기준
-    minGapPct: Math.max(0, numParam(req.query.minGap, 15)),
-    minFlowStrength: Math.max(0, numParam(req.query.minFlow, 0.03)),
-    minVolumeRatio: Math.max(1, numParam(req.query.minVolRatio, 1.05)),
+    // 이 세 값은 이제 "필수 조건"이 아니라 선택적 사전 필터다. 기본값 0은 "필터 없음"을 뜻한다 —
+    // 실제 순위는 아래 가중치로 합친 복합 점수로 매긴다.
+    minGapPct: Math.max(0, numParam(req.query.minGap, 0)),
+    // flowStrength는 순매도일 때 음수가 나올 수 있는 지표라, 0으로 바닥을 깔면
+    // "필터 끔"이 아니라 "순매수인 종목만" 이 되어버린다. 기본값(-1 = -100%)은
+    // 사실상 아무것도 거르지 않는 하한이고, 사용자가 원하면 0 이상 값을 넣어 필터로 쓴다.
+    minFlowStrength: numParam(req.query.minFlow, -1),
+    minVolumeRatio: Math.max(0, numParam(req.query.minVolRatio, 0)),
     flowDays: Math.min(20, Math.max(1, numParam(req.query.flowDays, 5))),
+    weightGap: w.g,
+    weightFlow: w.f,
+    weightVolume: w.v,
   };
   try {
     const result = await runScreen(opt);
@@ -994,5 +1041,5 @@ app.listen(PORT, () => console.log(`fairprice-proxy listening on ${PORT}`));
 module.exports = {
   app, fromNaver, fromFnGuide, toNum, rowByLabel, recordVisit, getStats, kstDate, lastNDays,
   fetchNaverHistoryPage, fetchNaverHistory, getFundamentals, searchByNaverPage,
-  fetchMarketCapPage, fetchMarketCapUniverse, fetchInvestorFlow, screenOne, runScreen,
+  fetchMarketCapPage, fetchMarketCapUniverse, fetchInvestorFlow, screenOne, runScreen, percentileRanks,
 };
