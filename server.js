@@ -765,7 +765,13 @@ async function runScreen(opt) {
     runnerUps: pool.slice(3, 13), // 참고용으로 좀 더 보여줌
     opt,
   };
-  await recordRecommendation(today, opt, out.candidates);
+  // 성과검증은 부가 기능이다 — 여기서 실패해도(Upstash 설정 오류 등) 스캔 결과 자체는
+  // 정상적으로 돌려줘야 한다. 실패는 조용히 넘어가되, 원인 파악용으로 콘솔에는 남긴다.
+  try {
+    await recordRecommendation(today, opt, out.candidates);
+  } catch (e) {
+    console.error('추천 기록 저장 실패(스캔 결과에는 영향 없음):', e.message);
+  }
   histCacheSet(cacheKey, out);
   return out;
 }
@@ -1063,7 +1069,9 @@ async function redisCmd(...args) {
   const j = await r.json();
   return j.result;
 }
-function hasRedis() { return !!(UPSTASH_URL && UPSTASH_TOKEN); }
+// URL/TOKEN 값이 서로 바뀌어 들어가거나 잘못된 값이 들어가면(예: URL 칸에 토큰이 들어감),
+// fetch가 그 순간 예외를 던지는 대신 여기서 미리 걸러서 "Redis 없음"으로 조용히 처리한다.
+function hasRedis() { return !!(UPSTASH_URL && UPSTASH_TOKEN && /^https?:\/\//.test(UPSTASH_URL)); }
 
 // Upstash 없을 때 쓰는 메모리 저장소 — 재시작하면 초기화됨
 const mem = {
@@ -1222,5 +1230,5 @@ module.exports = {
   app, fromNaver, fromFnGuide, toNum, rowByLabel, recordVisit, getStats, kstDate, lastNDays,
   fetchNaverHistoryPage, fetchNaverHistory, getFundamentals, searchByNaverPage,
   fetchMarketCapPage, fetchMarketCapSingle, fetchMarketCapUniverse, fetchInvestorFlow, screenOne, runScreen, percentileRanks,
-  recordRecommendation, getRecommendation, listRecommendationDates, priceAsOf, computePerformance,
+  recordRecommendation, getRecommendation, listRecommendationDates, priceAsOf, computePerformance, hasRedis,
 };
