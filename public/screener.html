@@ -48,6 +48,11 @@
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px}
 
   .grid{display:grid;gap:12px 14px;grid-template-columns:repeat(4,1fr)}
+  .grid2{display:grid;gap:12px 14px;grid-template-columns:repeat(2,1fr)}
+  .verdict{border-radius:var(--r);padding:14px 16px;color:#fff}
+  .verdict .tag{font-size:12.5px;opacity:.85;font-weight:700}
+  .verdict .big{font-size:24px;font-weight:800;letter-spacing:-0.02em;margin:4px 0 2px}
+  .verdict .line{font-size:13.5px;opacity:.92}
   .f{display:flex;flex-direction:column;gap:5px;min-width:0}
   .f label{font-size:12.5px;color:var(--ink-2);font-weight:600}
   .f .hint{font-weight:400;color:var(--ink-3)}
@@ -75,6 +80,7 @@
   .cand .metric{display:flex;justify-content:space-between;font-size:13px;margin-top:8px;padding-top:8px;border-top:1px solid var(--line-2)}
   .cand .metric span:first-child{color:var(--ink-2)}
   .cand .gap{font-size:22px;font-weight:800;margin:8px 0 2px;color:var(--gain)}
+  .gain-t{color:var(--gain)} .loss-t{color:var(--loss)}
 
   table{width:100%;border-collapse:collapse;font-size:13.5px}
   th,td{padding:8px 10px;text-align:right;border-bottom:1px solid var(--line-2)}
@@ -216,6 +222,38 @@
 </section>
 
 <section>
+  <div class="stitle"><h2>성과 검증</h2><span>지난 추천을 실제로 샀다면 지금 몇 %인지</span></div>
+  <div class="panel">
+    <div class="grid2">
+      <div class="f">
+        <label for="recoDate">추천일</label>
+        <select id="recoDate"><option value="">(스캔을 먼저 실행해서 날짜를 만드세요)</option></select>
+      </div>
+      <div class="f">
+        <label for="asOfDate">조회일</label>
+        <input id="asOfDate" type="date">
+      </div>
+    </div>
+    <div id="recoPicks" class="note" style="margin-top:10px"></div>
+    <div class="row">
+      <button class="act ghost" id="btnPerf">성과 조회</button>
+      <span id="perfStatus" class="fstatus"></span>
+    </div>
+    <div id="perfResult" style="display:none;margin-top:14px">
+      <div class="verdict" id="perfVerdict" style="background:var(--accent)"></div>
+      <table style="margin-top:12px">
+        <thead><tr><th>종목</th><th>매수 여부</th><th>추천일 가격</th><th>조회일 가격</th><th>수익률</th></tr></thead>
+        <tbody id="perfTable"></tbody>
+      </table>
+    </div>
+  </div>
+  <p class="note" style="margin-top:8px">
+    "조회일"이 주말·공휴일이면 그 이전 마지막 거래일 종가로 계산됩니다. Upstash Redis가 설정돼 있지 않으면
+    서버가 재시작될 때(Render 무료 플랜은 15분 무접속 시 재시작) 추천 기록이 사라져 이 목록이 비어 있을 수 있습니다.
+  </p>
+</section>
+
+<section>
   <details>
     <summary>계산 방식</summary>
     <div class="dbody">
@@ -337,7 +375,101 @@
     } else {
       $('runnerSec').style.display = 'none';
     }
+
+    refreshRecoDates(d.date);
   }
+
+  /* ── 성과 검증 ───────────────────────────── */
+  var recoStocks = []; // 현재 선택된 추천일의 종목 목록 (체크박스 표시용)
+
+  function todayStr(){ var d=new Date(); return d.toISOString().slice(0,10); }
+  if($('asOfDate')) $('asOfDate').value = todayStr();
+
+  function perfStatus(msg, kind){
+    var el = $('perfStatus');
+    el.className = 'fstatus' + (kind ? ' ' + kind : '');
+    el.textContent = msg;
+  }
+
+  function refreshRecoDates(preferDate){
+    fetch('/api/performance/dates').then(function(r){ return r.json(); }).then(function(j){
+      var sel = $('recoDate');
+      if(!j.dates || !j.dates.length){
+        sel.innerHTML = '<option value="">(아직 기록된 추천일이 없습니다)</option>';
+        return;
+      }
+      sel.innerHTML = j.dates.map(function(dt){ return '<option value="'+dt+'">'+dt+'</option>'; }).join('');
+      if(preferDate && j.dates.indexOf(preferDate) >= 0) sel.value = preferDate;
+      loadRecoPicks(sel.value);
+    }).catch(function(){ /* 스캔 화면은 정상 동작해야 하니 여기 실패는 조용히 무시 */ });
+  }
+
+  function loadRecoPicks(date){
+    recoStocks = [];
+    $('recoPicks').innerHTML = '';
+    $('perfResult').style.display = 'none';
+    if(!date) return;
+    perfStatus('불러오는 중…', 'busy');
+    fetch('/api/performance?date=' + encodeURIComponent(date) + '&asOf=' + encodeURIComponent(date)).then(function(r){
+      return r.json().then(function(j){ if(!r.ok) throw new Error(j.error || ('HTTP ' + r.status)); return j; });
+    }).then(function(j){
+      recoStocks = j.stocks;
+      $('recoPicks').innerHTML = '매수할 종목을 골라보세요(기본은 전부 선택) — '
+        + recoStocks.map(function(s){
+            return '<label style="margin-right:12px"><input type="checkbox" class="recoPick" value="'+s.code+'" checked> '
+              + s.name + ' (' + s.market + ')</label>';
+          }).join('');
+      perfStatus('');
+    }).catch(function(e){ perfStatus('추천 내역을 불러오지 못했습니다 — ' + e.message, 'err'); });
+  }
+
+  $('recoDate').addEventListener('change', function(){ loadRecoPicks(this.value); });
+
+  $('btnPerf').addEventListener('click', function(){
+    var date = $('recoDate').value;
+    if(!date){ perfStatus('먼저 추천일을 골라주세요.', 'err'); return; }
+    var asOf = $('asOfDate').value || todayStr();
+    var picked = Array.prototype.slice.call(document.querySelectorAll('.recoPick:checked')).map(function(el){ return el.value; });
+    if(!picked.length){ perfStatus('최소 한 종목은 선택해야 합니다.', 'err'); return; }
+
+    perfStatus('조회 중…', 'busy');
+    fetch('/api/performance?date=' + encodeURIComponent(date) + '&asOf=' + encodeURIComponent(asOf)
+      + '&codes=' + encodeURIComponent(picked.join(','))).then(function(r){
+      return r.json().then(function(j){ if(!r.ok) throw new Error(j.error || ('HTTP ' + r.status)); return j; });
+    }).then(function(j){
+      perfStatus('');
+      renderPerformance(j);
+    }).catch(function(e){ perfStatus('조회에 실패했습니다 — ' + e.message, 'err'); });
+  });
+
+  function renderPerformance(j){
+    $('perfResult').style.display = 'block';
+    var picked = j.stocks.filter(function(s){ return s.selected; });
+    var withReturn = picked.filter(function(s){ return s.returnPct != null; });
+    var v = $('perfVerdict');
+    if(j.portfolioReturnPct == null){
+      v.style.background = 'var(--ink-3)';
+      v.innerHTML = '<div class="tag">계산 불가</div><div class="big">데이터 부족</div><div class="line">선택한 종목의 조회일 가격을 못 가져왔습니다.</div>';
+    } else {
+      var gain = j.portfolioReturnPct >= 0;
+      v.style.background = gain ? 'var(--gain)' : 'var(--loss)';
+      v.innerHTML = '<div class="tag">' + j.recoDate + ' 매수 → ' + j.asOfDate + ' 기준 · 종목 ' + picked.length + '개(균등비중 가정)</div>'
+        + '<div class="big">' + (gain?'+':'') + j.portfolioReturnPct.toFixed(2) + '%</div>'
+        + '<div class="line">' + withReturn.length + '/' + picked.length + '개 종목 가격 확인됨</div>';
+    }
+    $('perfTable').innerHTML = j.stocks.map(function(s){
+      var retTxt = s.returnPct == null ? '—' : (s.returnPct>=0?'+':'') + s.returnPct.toFixed(2) + '%';
+      var retCls = s.returnPct == null ? '' : (s.returnPct>=0?'gain-t':'loss-t');
+      return '<tr' + (s.selected ? '' : ' style="opacity:.45"') + '>'
+        + '<td>' + s.name + ' (' + s.code + ')' + (s.market?' · '+s.market:'') + '</td>'
+        + '<td>' + (s.selected ? '매수함' : '제외') + '</td>'
+        + '<td>' + fmtWon(s.recoPrice) + '</td>'
+        + '<td>' + fmtWon(s.asOfPrice) + (s.asOfActualDate && s.asOfActualDate !== j.asOfDate ? ' <span style="color:var(--ink-3);font-size:11px">('+s.asOfActualDate+' 기준)</span>' : '') + '</td>'
+        + '<td class="' + retCls + '">' + retTxt + '</td></tr>';
+    }).join('');
+  }
+
+  refreshRecoDates();
 })();
 </script>
 </body>
