@@ -215,6 +215,7 @@
         <li>적정주가는 <a href="index.html">상황별 적정주가 계산기</a>와 같은 공식(초과이익모델)을 씁니다. 여기서는 종목마다 신용등급을 따로 조회하지 않고, 위에서 정한 단일 요구수익률을 유니버스 전체에 동일하게 적용합니다.</li>
         <li>괴리율 = (현재가 ÷ 적정주가 − 1). 음수가 클수록(더 마이너스일수록) 저평가입니다.</li>
         <li>ROE가 요구수익률보다 낮은 종목(초과이익이 없는 종목)이나 저평가가 아닌 종목(괴리율 0 이상)은 순위 계산에서 제외합니다.</li>
+        <li>ROE가 요구수익률을 3%p 이내로만 넘는 종목은 카드에 <b>"⚠ 가정에 민감한 결과"</b> 경고가 뜹니다. 초과이익이 작을수록 요구수익률 가정을 조금만 바꿔도(예: 신용등급을 다르게 잡으면) 적정주가가 크게 흔들리기 때문입니다 — 특히 상승장(w=1) 국면에서 그 차이가 커집니다.</li>
         <li>수급강도 = 최근 N거래일 (기관 순매수 + 외국인 순매수) 합계 ÷ 같은 기간 총 거래량. 거래량비율 = 최근 1일 거래량 ÷ 최근 20일 평균 거래량.</li>
         <li><b>순위는 세 조건을 전부 만족해야 하는 방식이 아닙니다.</b> 저평가 폭·수급강도·거래량비율을 각각 그날 유니버스 안에서 백분위(0~100%)로 바꾼 뒤, 설정한 가중치(기본 50/30/20)로 가중합해 점수를 내고 높은 순으로 정렬합니다. "선택적 사전 필터"에 값을 넣으면 그 기준 미달 종목을 아예 순위 계산에서 빼는 것이고, 기본값(0)은 필터 없이 유니버스 전체를 대상으로 순위만 매깁니다.</li>
       </ul>
@@ -299,8 +300,14 @@
     } else {
       $('emptyMsg').style.display = 'none';
       $('cards').innerHTML = d.candidates.map(function(c, i){
+        var warn = c.thinMargin
+          ? '<div style="margin:2px 0 8px;padding:5px 8px;background:#FDF1EC;border:1px solid #F0C9B8;'
+          + 'border-radius:6px;color:#7A2E10;font-size:11.5px;font-weight:600">'
+          + '⚠ ROE가 요구수익률을 ' + c.marginPct.toFixed(1) + '%p밖에 안 넘음 — 가정에 민감한 결과</div>'
+          : '';
         return '<div class="cand"><div class="rank">' + (i+1) + '순위 · 점수 ' + (c.score*100).toFixed(0) + '</div>'
           + '<h3>' + c.name + ' <span class="code">' + c.code + '</span></h3>'
+          + warn
           + '<div class="gap">' + fmtPct(c.gapPct) + '</div>'
           + '<div class="metric"><span>현재가</span><span>' + fmtWon(c.price) + '</span></div>'
           + '<div class="metric"><span>적정주가</span><span>' + fmtWon(c.fairPrice) + '</span></div>'
@@ -313,7 +320,8 @@
     if(d.runnerUps && d.runnerUps.length){
       $('runnerSec').style.display = 'block';
       $('runnerTable').innerHTML = d.runnerUps.map(function(c){
-        return '<tr><td>' + c.name + ' (' + c.code + ')</td><td>' + (c.score*100).toFixed(0) + '</td><td>' + fmtWon(c.price) + '</td>'
+        var mark = c.thinMargin ? ' ⚠' : '';
+        return '<tr><td>' + c.name + mark + ' (' + c.code + ')</td><td>' + (c.score*100).toFixed(0) + '</td><td>' + fmtWon(c.price) + '</td>'
           + '<td>' + fmtWon(c.fairPrice) + '</td><td>' + fmtPct(c.gapPct) + '</td>'
           + '<td>' + fmtPct(c.flowStrength*100,1) + '</td><td>' + fmtRatio(c.volumeRatio) + '</td></tr>';
       }).join('');
