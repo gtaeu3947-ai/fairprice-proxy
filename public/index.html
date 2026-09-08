@@ -232,22 +232,23 @@
         <select id="grade">
           <option value="4.49">AAA · 4.49%</option>
           <option value="4.58">AA+ · 4.58%</option>
-          <option value="4.64">AA · 4.64%</option>
+          <option value="4.64" selected>AA · 4.64%</option>
           <option value="4.74">AA- · 4.74%</option>
           <option value="5.41">A+ · 5.41%</option>
           <option value="5.86">A · 5.86%</option>
           <option value="6.46">A- · 6.46%</option>
           <option value="8.33">BBB+ · 8.33%</option>
           <option value="9.38">BBB · 9.38%</option>
-          <option value="10.80" selected>BBB- · 10.80%</option>
+          <option value="10.80">BBB- · 10.80%</option>
           <option value="custom">직접 입력</option>
         </select>
       </div>
       <div class="f">
         <label for="kbase">기준 요구수익률 <span class="hint">% · 5년물</span></label>
-        <input id="kbase" type="number" value="10.80" step="0.01">
+        <input id="kbase" type="number" value="4.64" step="0.01">
       </div>
     </div>
+    <p class="note" style="margin-top:2px">기본값(AA·4.64%)은 스크리너와 맞춘 일반적인 값입니다. 종목의 실제 신용등급을 아시면 그에 맞게 바꿔서 계산하세요.</p>
     <div class="row">
       <button class="act ghost" id="btnAdd">비교표에 담기</button>
       <button class="act ghost" id="btnClear">입력 비우기</button>
