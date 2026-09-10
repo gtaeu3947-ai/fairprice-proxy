@@ -252,6 +252,84 @@ async function fromNaverApi(code) {
   return out;
 }
 
+/**
+ * 라벨이 붙은 시계열 행을 JSON에서 찾아낸다.
+ *
+ * 네이버 재무 API는 대략 { rowList: [{ title:"ROE", columns:{ "202312":{value:"9.1"}, ... } }] }
+ * 꼴인데, 감싸는 이름이나 값 자리(value/val/amount)가 판마다 다르다.
+ * 그래서 "문자열 라벨 + 기간별 숫자 묶음"이라는 모양만 보고 뽑는다.
+ */
+function extractLabeledSeries(node, out, depth) {
+  out = out || [];
+  if (node == null || (depth || 0) > 7) return out;
+  if (Array.isArray(node)) {
+    node.forEach(v => extractLabeledSeries(v, out, (depth || 0) + 1));
+    return out;
+  }
+  if (typeof node !== 'object') return out;
+
+  const label = [node.title, node.key, node.name, node.itemName, node.accountName]
+    .find(v => typeof v === 'string' && v.trim());
+  if (label) {
+    // 기간별 값이 담긴 자리를 찾는다. 객체({기간:{value}})든 배열이든 받는다.
+    for (const [k, v] of Object.entries(node)) {
+      if (!v || typeof v !== 'object') continue;
+      const entries = Array.isArray(v) ? v.map((x, i) => [String(i), x]) : Object.entries(v);
+      if (entries.length < 2 || entries.length > 24) continue;
+      const values = entries.map(([, cell]) => {
+        if (cell == null) return null;
+        if (typeof cell === 'string' || typeof cell === 'number') return toNum(cell);
+        if (typeof cell === 'object') {
+          const inner = [cell.value, cell.val, cell.amount, cell.num].find(x => x != null);
+          return inner == null ? null : toNum(inner);
+        }
+        return null;
+      });
+      if (values.filter(x => x != null).length >= 2) {
+        out.push({ label: label.trim(), field: k, periods: entries.map(([p]) => p), values });
+        break;
+      }
+    }
+  }
+  Object.values(node).forEach(v => {
+    if (v && typeof v === 'object') extractLabeledSeries(v, out, (depth || 0) + 1);
+  });
+  return out;
+}
+
+/**
+ * 네이버 재무 API에서 ROE·지배주주지분을 읽는다.
+ * FnGuide 파싱이 값을 못 낼 때를 대비한 두 번째 출처.
+ */
+async function fromNaverFinance(code) {
+  const urls = [
+    `https://m.stock.naver.com/api/stock/${code}/finance/annual`,
+    `https://api.stock.naver.com/stock/${code}/finance/annual`,
+  ];
+  const out = { sourceUrl: urls[0], roeSeries: null, equityEok: null };
+  let rows = null, lastErr = null;
+  for (const u of urls) {
+    try { rows = extractLabeledSeries(await fetchJson(u), [], 0); if (rows.length) { out.sourceUrl = u; break; } }
+    catch (e) { lastErr = e.message; }
+  }
+  if (!rows || !rows.length) throw new Error('재무 API에서 항목을 읽지 못했습니다' + (lastErr ? ' — ' + lastErr : ''));
+
+  const find = (re) => rows.find(r => re.test(r.label));
+  const clean = (r) => r ? r.values.filter(v => v != null) : null;
+
+  // 기간 라벨에 (E)가 붙은 추정치 컬럼은 빼야 하는데, API에는 보통 실적만 들어온다.
+  const roe = clean(find(/^ROE/i));
+  if (roe && roe.length) out.roeSeries = roe;
+
+  const eq = clean(find(/지배주주지분|지배기업.*소유주|지배기업주주지분/)) || clean(find(/^자본총계/));
+  if (eq && eq.length) {
+    out.equityEok = eq[eq.length - 1];    // 네이버 재무 API는 억원 단위
+    out.equityIsConsolidatedTotal = !find(/지배주주지분|지배기업/);
+  }
+  out.labelsSeen = rows.map(r => r.label).slice(0, 40);
+  return out;
+}
+
 async function fromNaver(code) {
   const url = `https://finance.naver.com/item/main.naver?code=${code}`;
   const html = await fetchHtml(url);
@@ -449,35 +527,41 @@ async function getFundamentals(code) {
   const warnings = [];
   // 네이버는 API와 HTML 두 경로를 모두 시도한다. 2026-09 개편으로 HTML에서
   // 현재가가 사라졌기 때문에, 현재가는 사실상 API 쪽이 담당한다.
-  const [a, n, f] = await Promise.allSettled([fromNaverApi(code), fromNaver(code), fromFnGuide(code)]);
+  const [a, fin, n, f] = await Promise.allSettled([
+    fromNaverApi(code), fromNaverFinance(code), fromNaver(code), fromFnGuide(code),
+  ]);
   const api = a.status === 'fulfilled' ? a.value : null;
+  const nfin = fin.status === 'fulfilled' ? fin.value : null;
   const naver = n.status === 'fulfilled' ? n.value : null;
   const fn = f.status === 'fulfilled' ? f.value : null;
   if (!api) warnings.push('네이버 API를 읽지 못했습니다: ' + (a.reason?.message || '알 수 없음'));
+  if (!nfin) warnings.push('네이버 재무 API를 읽지 못했습니다: ' + (fin.reason?.message || '알 수 없음'));
   if (!naver) warnings.push('네이버 종목페이지를 읽지 못했습니다: ' + (n.reason?.message || '알 수 없음'));
   if (!fn) warnings.push('FnGuide를 읽지 못했습니다: ' + (f.reason?.message || '알 수 없음'));
-  if (!api && !naver && !fn) {
-    const e = new Error('세 경로 모두 읽지 못했습니다.');
+  if (!api && !nfin && !naver && !fn) {
+    const e = new Error('모든 경로를 읽지 못했습니다.');
     e.warnings = warnings;
     throw e;
   }
 
   // ROE 최근 3개 (과거 → 최근 순)
-  let roe = (fn && fn.roeSeries) || (naver && naver.roeSeries) || [];
+  let roe = (fn && fn.roeSeries) || (nfin && nfin.roeSeries) || (naver && naver.roeSeries) || [];
   roe = roe.filter(v => v != null).slice(-3);
   while (roe.length < 3) roe.unshift(null);
   if (roe.some(v => v == null)) warnings.push('최근 3년 ROE를 다 채우지 못했습니다. 빈 칸은 직접 입력하십시오.');
 
   const bps = (naver && naver.bps) ?? (api && api.bps) ?? null;
   const sharesAny = (naver && naver.shares) ?? (api && api.shares) ?? null;
-  let equityEok = fn ? fn.equityEok : null;
-  let equityNote = 'FnGuide 지배주주지분 (최근 연간)';
+  let equityEok = (fn && fn.equityEok) ?? (nfin && nfin.equityEok) ?? null;
+  let equityNote = (fn && fn.equityEok) ? 'FnGuide 지배주주지분 (최근 연간)'
+                 : (nfin && nfin.equityEok) ? '네이버 재무 API (최근 연간)'
+                 : 'FnGuide 지배주주지분 (최근 연간)';
   if (equityEok == null && bps && sharesAny) {
     equityEok = (bps * sharesAny) / 1e8;   // 원 → 억원
     equityNote = 'BPS × 상장주식수로 추정한 값 (확인 필요)';
     warnings.push('지배주주지분을 직접 읽지 못해 BPS × 상장주식수로 추정했습니다. FnGuide에서 실제 값을 확인하십시오.');
   }
-  if (fn && fn.equityIsConsolidatedTotal) {
+  if ((fn && fn.equityIsConsolidatedTotal) || (!(fn && fn.equityEok) && nfin && nfin.equityIsConsolidatedTotal)) {
     warnings.push('지배주주지분 항목이 없어 자본총계를 사용했습니다. 비지배지분이 크면 값이 달라집니다.');
   }
 
@@ -499,6 +583,7 @@ async function getFundamentals(code) {
     warnings,
     sources: {
       naverApi: api ? api.apiSources.join(',') : null,
+      naverFinance: nfin ? nfin.sourceUrl : null,
       naver: naver ? naver.sourceUrl : null,
       fnguide: fn ? fn.sourceUrl : null,
     },
@@ -991,8 +1076,15 @@ async function screenOne(item, opt) {
       getFundamentals(item.code),
       fetchInvestorFlow(item.code, opt.flowDays),
     ]);
-    if (!fund.price || !fund.equityEok || !fund.shares || fund.roe.some(v => v == null)) {
-      return { code: item.code, name: item.name, skipped: '데이터 부족' };
+    // "데이터 부족" 한마디로 뭉뚱그리면 무엇이 빠졌는지 알 수 없어 원인 추적이 안 된다.
+    // 어느 항목이 비었는지 남겨서 화면에 집계로 보여준다.
+    const missing = [];
+    if (!fund.price) missing.push('현재가');
+    if (!fund.equityEok) missing.push('자기자본');
+    if (!fund.shares) missing.push('발행주식수');
+    if (fund.roe.some(v => v == null)) missing.push('ROE 3년');
+    if (missing.length) {
+      return { code: item.code, name: item.name, skipped: '데이터 부족: ' + missing.join('·') };
     }
     const sharesOut = fund.shares - (fund.treasury || 0);
     const fv = fairValue(fund.equityEok, fund.roe[0], fund.roe[1], fund.roe[2], opt.kbasePct, opt.regime, sharesOut);
@@ -1042,6 +1134,16 @@ async function runScreen(opt) {
 
   const scored = results.filter(r => !r.skipped);
   const skippedCount = results.length - scored.length;
+
+  // 제외 사유를 집계한다. 전부 제외됐을 때 어디가 끊겼는지 바로 보이도록.
+  const skipTally = {};
+  results.filter(r => r.skipped).forEach(r => {
+    const key = String(r.skipped).slice(0, 60);
+    skipTally[key] = (skipTally[key] || 0) + 1;
+  });
+  const skipReasons = Object.entries(skipTally)
+    .sort((a, b) => b[1] - a[1]).slice(0, 6)
+    .map(([reason, count]) => ({ reason, count }));
 
   // 어느 조건에서 다 떨어지는지 바로 보이게, 단계별로 몇 개가 남는지 센다.
   const funnel = {
@@ -1093,6 +1195,7 @@ async function runScreen(opt) {
       universeStaleHours: universe.staleHours ?? null,
       consideredCount: scored.length,
       skippedCount,
+      skipReasons,
       passedCount: poolKospi.length + poolKosdaq.length,
       funnel,
       candidatesKospi,
@@ -1114,6 +1217,7 @@ async function runScreen(opt) {
       universeStaleHours: universe.staleHours ?? null,
       consideredCount: scored.length,
       skippedCount,
+      skipReasons,
       passedCount: pool.length,
       funnel,
       candidates: pool.slice(0, 3),
@@ -1612,6 +1716,119 @@ app.get('/api/ohlcv/:code', checkStatsAuth, async (req, res) => {
   }
 });
 
+/**
+ * 종목 하나에 대해 각 출처가 무엇을 돌려줬는지 나란히 보여준다.
+ * "검토 0종목"처럼 전 종목이 탈락할 때, 어느 출처의 어느 항목이 비었는지 한눈에 본다.
+ */
+/**
+ * 재무 항목(자기자본·ROE·발행주식수) 출처 탐색기.
+ *
+ * 2026-09 개편으로 네이버 종목 페이지의 표가 사라졌고 FnGuide 파싱도 값을 못 냈다.
+ * 어떤 API가 무엇을 담고 있는지 확인해야 파서를 다시 맞출 수 있는데, 응답 전체를
+ * 눈으로 보기엔 너무 커서 — 관심 있는 라벨만 골라 경로와 값을 보여준다.
+ */
+const FIN_LABEL = /roe|자본|주식수|shares|equity|bps|자기주식|자사주|발행/i;
+
+/** JSON을 훑어 라벨이 관심 항목에 걸리는 자리만 경로와 함께 모은다. */
+function findFinancialHits(node, path, out, depth) {
+  if (node == null || (depth || 0) > 7 || out.length >= 60) return out;
+  if (Array.isArray(node)) {
+    node.slice(0, 40).forEach((v, i) => findFinancialHits(v, `${path}[${i}]`, out, (depth || 0) + 1));
+    return out;
+  }
+  if (typeof node !== 'object') return out;
+
+  for (const [k, v] of Object.entries(node)) {
+    const p = path ? `${path}.${k}` : k;
+    if (FIN_LABEL.test(k) && (typeof v === 'string' || typeof v === 'number')) {
+      out.push({ path: p, value: String(v).slice(0, 40) });
+    } else if (typeof v === 'string' && FIN_LABEL.test(v) && v.length < 30) {
+      // { title: "ROE", ... } 처럼 라벨이 값 쪽에 있는 경우 — 형제 필드를 같이 보여준다.
+      const siblings = {};
+      Object.entries(node).slice(0, 12).forEach(([sk, sv]) => {
+        if (typeof sv === 'string' || typeof sv === 'number') siblings[sk] = String(sv).slice(0, 30);
+        else if (sv && typeof sv === 'object') siblings[sk] = '(' + (Array.isArray(sv) ? 'array' : 'object') + ')';
+      });
+      out.push({ path: p, labelValue: v, siblings });
+    }
+  }
+  for (const [k, v] of Object.entries(node)) {
+    if (v && typeof v === 'object') findFinancialHits(v, path ? `${path}.${k}` : k, out, (depth || 0) + 1);
+  }
+  return out;
+}
+
+app.get('/api/probe/:code', async (req, res) => {
+  const code = req.params.code;
+  const candidates = [
+    ['naver-integration', `https://m.stock.naver.com/api/stock/${code}/integration`],
+    ['naver-basic', `https://m.stock.naver.com/api/stock/${code}/basic`],
+    ['naver-finance-annual', `https://m.stock.naver.com/api/stock/${code}/finance/annual`],
+    ['naver-finance-quarter', `https://m.stock.naver.com/api/stock/${code}/finance/quarter`],
+    ['naver-price-basic', `https://api.stock.naver.com/stock/${code}/basic`],
+    ['naver-integration-alt', `https://api.stock.naver.com/stock/${code}/integration`],
+    ['wisereport', `https://navercomp.wisereport.co.kr/v1/company/c1010001.aspx?cmp_cd=${code}&finGubun=MAIN&frq=0`],
+  ];
+
+  const results = await Promise.all(candidates.map(async ([name, url]) => {
+    try {
+      const r = await fetch(url, {
+        headers: { 'User-Agent': UA, 'Accept-Language': 'ko-KR,ko;q=0.9', Referer: 'https://m.stock.naver.com/' },
+      });
+      const text = await r.text();
+      if (!r.ok) return { name, url, status: r.status, head: text.slice(0, 150) };
+      let j = null;
+      try { j = JSON.parse(text); } catch { /* HTML일 수 있다 */ }
+      if (!j) {
+        // JSON이 아니면 본문에서 라벨 주변 텍스트만 잘라 보여준다.
+        const flat = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+        const snippets = [];
+        for (const kw of ['ROE', '지배주주지분', '자본총계', '발행주식수', '자기주식']) {
+          const idx = flat.indexOf(kw);
+          if (idx >= 0) snippets.push(kw + ' → ' + flat.slice(idx, idx + 90));
+        }
+        return { name, url, status: r.status, type: 'html', bytes: text.length, snippets };
+      }
+      return {
+        name, url, status: r.status, type: 'json', bytes: text.length,
+        topKeys: Object.keys(j).slice(0, 20),
+        hits: findFinancialHits(j, '', [], 0).slice(0, 25),
+      };
+    } catch (e) {
+      return { name, url, error: e.message };
+    }
+  }));
+
+  res.json({ code, results });
+});
+
+app.get('/api/fundamentals-raw/:code', async (req, res) => {
+  const code = req.params.code;
+  const [a, fin, n, f] = await Promise.allSettled([
+    fromNaverApi(code), fromNaverFinance(code), fromNaver(code), fromFnGuide(code),
+  ]);
+  const val = (p) => p.status === 'fulfilled' ? p.value : { error: p.reason?.message || '실패' };
+  let merged = null, mergedError = null;
+  try { merged = await getFundamentals(code); }
+  catch (e) { mergedError = e.message; }
+  res.json({
+    code,
+    naverApi: val(a),
+    naverFinance: val(fin),
+    naverHtml: val(n),
+    fnguide: val(f),
+    merged, mergedError,
+    // 스크리너가 요구하는 네 항목이 다 찼는지 — 하나라도 비면 그 종목은 제외된다.
+    screenerReady: merged ? {
+      price: merged.price ?? null,
+      equityEok: merged.equityEok ?? null,
+      shares: merged.shares ?? null,
+      roe: merged.roe,
+      ok: !!(merged.price && merged.equityEok && merged.shares && merged.roe.every(v => v != null)),
+    } : null,
+  });
+});
+
 app.get('/api/sectors-raw', checkStatsAuth, async (req, res) => {
   try {
     const m = await fetchSectorMap();
@@ -1985,7 +2202,7 @@ app.get('/api/flow/:code', checkStatsAuth, async (req, res) => {
  * "고쳤는데 왜 그대로냐"의 원인이 대부분 "아직 예전 코드가 돌고 있다"였다.
  * BUILD를 올려두면 /api/health만 열어봐도 지금 무엇이 떠 있는지 바로 알 수 있다.
  */
-const BUILD = '2026-09-11 종목 기본정보 API 전환(네이버 개편 대응) + 유니버스 확대';
+const BUILD = '2026-09-11c 재무 API 출처 추가 + 출처 탐색기(/api/probe)';
 
 app.get('/api/health', (_, res) => res.json({
   ok: true,
@@ -1997,6 +2214,8 @@ app.get('/api/health', (_, res) => res.json({
     conditionSource: loadMomentumConfig().source || 'none',
     universeMultiSource: true,      // 시가총액 수집 3경로
     stockBasicViaApi: true,         // 현재가·종목명을 JSON API에서 우선 수집
+    financeViaApi: true,            // ROE·자기자본을 네이버 재무 API에서도 수집
+    probeEndpoint: true,            // /api/probe/:code
     universeMax: 2000,
     diagEndpoint: true,             // /api/diag
   },
@@ -2217,7 +2436,7 @@ app.listen(PORT, () => console.log(`fairprice-proxy listening on ${PORT}`));
 
 module.exports = {
   app, fromNaver, fromFnGuide, toNum, rowByLabel, recordVisit, getStats, kstDate, lastNDays,
-  fetchNaverHistoryPage, fetchNaverHistory, getFundamentals, fromNaverApi, findValueByKey, findStringByKey, searchByNaverPage,
+  fetchNaverHistoryPage, fetchNaverHistory, getFundamentals, fromNaverApi, fromNaverFinance, extractLabeledSeries, findValueByKey, findStringByKey, searchByNaverPage,
   fetchMarketCapPage, fetchMarketCapSingle, fetchMarketCapUniverse, fetchInvestorFlow, screenOne, runScreen, percentileRanks,
   recordRecommendation, getRecommendation, listRecommendationDates, priceAsOf, computePerformance, hasRedis,
   fetchOhlcv, fetchOhlcvChartApi, fetchOhlcvHtml, fetchSectorMap, fetchSectorList, fetchSectorMembers,
