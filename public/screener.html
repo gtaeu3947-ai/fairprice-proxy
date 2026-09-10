@@ -112,6 +112,7 @@
 <header>
   <nav>
     <a href="index.html">상황별 적정주가 계산기</a>
+    <a href="momentum.html">모멘텀·섹터 스크리너</a>
     <a href="simulator.html">물타기·불타기 시뮬레이터</a>
   </nav>
   <h1>저평가·수급 스크리너</h1>
@@ -337,11 +338,14 @@
 
   function render(d){
     var f = d.funnel || {};
+    var staleMsg = d.universeStaleHours != null
+      ? ' ⚠ 네이버에서 시가총액 순위를 못 받아 ' + d.universeStaleHours + '시간 전 목록으로 스캔했습니다.'
+      : '';
     status(d.date + ' 종가 기준 · 유니버스 ' + d.universeSize + '종목 · 검토 ' + d.consideredCount
       + '종목(데이터 부족 제외 ' + d.skippedCount + ') · 조건 통과 ' + d.passedCount + '종목'
       + ' [저평가 ' + f.undervalued + ' → 저평가폭 통과 ' + f.passedGap
       + ' | 수급데이터 있음 ' + f.flowDataAvailable + ' → 수급강도 통과 ' + f.passedFlow
-      + ' → 거래량비율 통과 ' + f.passedVolume + ']');
+      + ' → 거래량비율 통과 ' + f.passedVolume + ']' + staleMsg);
 
     $('resultSec').style.display = 'block';
     $('scanMeta').textContent = d.date + ' 종가 기준';
@@ -411,7 +415,7 @@
   }
 
   function refreshRecoDates(preferDate){
-    fetch('/api/performance/dates').then(function(r){ return r.json(); }).then(function(j){
+    fetch('/api/performance/dates?kind=value').then(function(r){ return r.json(); }).then(function(j){
       var sel = $('recoDate');
       if(!j.dates || !j.dates.length){
         sel.innerHTML = '<option value="">(아직 기록된 추천일이 없습니다)</option>';
@@ -429,7 +433,7 @@
     $('perfResult').style.display = 'none';
     if(!date) return;
     perfStatus('불러오는 중…', 'busy');
-    fetch('/api/performance?date=' + encodeURIComponent(date) + '&asOf=' + encodeURIComponent(date)).then(function(r){
+    fetch('/api/performance?kind=value&date=' + encodeURIComponent(date) + '&asOf=' + encodeURIComponent(date)).then(function(r){
       return r.json().then(function(j){ if(!r.ok) throw new Error(j.error || ('HTTP ' + r.status)); return j; });
     }).then(function(j){
       recoStocks = j.stocks;
@@ -452,7 +456,7 @@
     if(!picked.length){ perfStatus('최소 한 종목은 선택해야 합니다.', 'err'); return; }
 
     perfStatus('조회 중…', 'busy');
-    fetch('/api/performance?date=' + encodeURIComponent(date) + '&asOf=' + encodeURIComponent(asOf)
+    fetch('/api/performance?kind=value&date=' + encodeURIComponent(date) + '&asOf=' + encodeURIComponent(asOf)
       + '&codes=' + encodeURIComponent(picked.join(','))).then(function(r){
       return r.json().then(function(j){ if(!r.ok) throw new Error(j.error || ('HTTP ' + r.status)); return j; });
     }).then(function(j){
