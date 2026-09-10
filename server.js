@@ -13,12 +13,14 @@
  *   GET /screener.html, /api/screen   저평가·수급 스크리너 (Basic Auth, 소유자 전용)
  */
 
+const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const cheerio = require('cheerio');
 const iconv = require('iconv-lite');
 const crypto = require('crypto');
 const { fairValue, gapPct } = require('./public/fairvalue-core.js');
+const MC = require('./public/momentum-core.js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -43,6 +45,11 @@ app.use((req, res, next) => {
 // express.static보다 먼저 등록해야 이 라우트가 우선한다.
 app.get('/screener.html', checkStatsAuth, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'screener.html'));
+});
+
+// 모멘텀 스크리너는 종목당 일봉 120일치를 받아오므로 요청량이 더 크다 — 같은 계정으로 막는다.
+app.get('/momentum.html', checkStatsAuth, (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'momentum.html'));
 });
 
 app.use(express.static('public'));
@@ -492,26 +499,175 @@ app.get('/api/history/:code', async (req, res) => {
  * 컬럼 구성이 바뀌어도 이 링크 패턴은 잘 안 바뀐다.
  */
 
-async function fetchMarketCapPage(page, sosok) {
-  sosok = sosok === 1 ? 1 : 0; // 0=코스피, 1=코스닥
-  const url = `https://finance.naver.com/sise/sise_market_sum.naver?sosok=${sosok}&page=${page}`;
-  const html = await fetchHtml(url);
+/**
+ * 네트워크 실패는 대부분 일시적이다(네이버 일시 차단·점검·타임아웃).
+ * 한 번 실패했다고 바로 포기하지 말고 점점 간격을 늘려가며 다시 시도한다.
+ */
+async function withRetry(fn, tries, baseDelayMs) {
+  tries = tries || 3;
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try { return await fn(); }
+    catch (e) {
+      last = e;
+      if (i < tries - 1) await new Promise(r => setTimeout(r, (baseDelayMs || 700) * Math.pow(2, i)));
+    }
+  }
+  throw last;
+}
+
+/* ───────────── 시가총액 순위 수집 ─────────────
+ *
+ * 2026-09, 네이버가 시가총액 페이지를 Next.js로 다시 만들면서 HTML에
+ * <a href="/item/main.naver?code=..."> 링크가 사라졌다. 앵커만 보던 파서가
+ * 0개를 읽어서 스캔 전체가 죽었다.
+ *
+ * 같은 일이 또 나도 버티도록, 수집 경로를 셋 두고 되는 것을 쓴다.
+ *   1) 모바일 JSON API   — 제일 깔끔. 응답 구조가 바뀌어도 재귀 탐색으로 흡수한다.
+ *   2) 페이지 안 내장 JSON — Next.js는 데이터를 HTML 안에 문자열로 실어 보낸다.
+ *                            마크업이 아니라 원문 텍스트에서 정규식으로 뽑으므로
+ *                            화면 구조가 또 바뀌어도 대체로 살아남는다.
+ *   3) 예전 앵커 마크업   — 구버전 페이지가 남아 있을 때를 위한 마지막 수단.
+ *
+ * 어느 경로가 먹혔는지는 /api/diag에서 확인할 수 있다.
+ */
+
+const CODE_KEY = /(^|_)(item)?code$/i;   // itemCode, code, reutersCode 등
+const NAME_KEY = /name$/i;               // stockName, itemName, name 등
+
+/**
+ * 아무 모양의 JSON에서든 { 6자리 코드, 종목명 } 쌍을 찾아낸다.
+ * 응답이 { result: { stocks: [...] } }든 { datas: [...] }든 상관없이 동작하게
+ * 키 이름 패턴만 보고 재귀로 훑는다 — 네이버가 감싸는 껍데기를 바꿔도 버티게 하려는 것.
+ */
+function collectStocksFromJson(node, out, seen, depth) {
+  if (node == null || (depth || 0) > 8) return out;
+  if (Array.isArray(node)) {
+    node.forEach(v => collectStocksFromJson(v, out, seen, (depth || 0) + 1));
+    return out;
+  }
+  if (typeof node !== 'object') return out;
+
+  let code = null, name = null;
+  for (const [k, v] of Object.entries(node)) {
+    if (typeof v === 'string') {
+      if (!code && CODE_KEY.test(k) && /^\d{6}$/.test(v)) code = v;
+      else if (!name && NAME_KEY.test(k) && v.trim() && !/^\d+$/.test(v)) name = v.trim();
+    }
+  }
+  if (code && name && !seen.has(code)) { seen.add(code); out.push({ code, name }); }
+
+  Object.values(node).forEach(v => {
+    if (v && typeof v === 'object') collectStocksFromJson(v, out, seen, (depth || 0) + 1);
+  });
+  return out;
+}
+
+/**
+ * HTML 원문에서 코드·종목명 쌍을 뽑는다.
+ * Next.js가 데이터를 self.__next_f.push([1,"...\"itemCode\":\"005930\"..."]) 형태로
+ * 실어 보내기 때문에 따옴표가 이스케이프돼 있다. \\? 를 곳곳에 넣어 두 경우를 다 받는다.
+ * 순서는 등장 순서 = 시가총액 순위 순서를 그대로 따른다.
+ */
+function extractStocksFromText(text) {
+  const out = [];
+  const seen = new Set();
+  const push = (code, name) => {
+    if (!/^\d{6}$/.test(code)) return;
+    const n = String(name).replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16))).trim();
+    if (!n || seen.has(code)) return;
+    seen.add(code);
+    out.push({ code, name: n });
+  };
+
+  // 코드가 먼저 나오는 경우
+  const re1 = /(?:item)?[Cc]ode\\?"\s*:\s*\\?"(\d{6})\\?"[\s\S]{0,300}?(?:stockName|itemName|name)\\?"\s*:\s*\\?"((?:[^"\\]|\\.){1,40}?)\\?"/g;
+  // 이름이 먼저 나오는 경우
+  const re2 = /(?:stockName|itemName)\\?"\s*:\s*\\?"((?:[^"\\]|\\.){1,40}?)\\?"[\s\S]{0,300}?(?:item)?[Cc]ode\\?"\s*:\s*\\?"(\d{6})\\?"/g;
+
+  let m;
+  while ((m = re1.exec(text)) !== null) push(m[1], m[2]);
+  if (!out.length) { while ((m = re2.exec(text)) !== null) push(m[2], m[1]); }
+  return out;
+}
+
+/** 예전 마크업: /item/main.naver?code=XXXXXX 앵커 */
+function extractStocksFromAnchors(html) {
   const $ = cheerio.load(html);
   const out = [];
   const seen = new Set();
   $('a[href*="/item/main.naver?code="]').each((_, a) => {
-    const href = $(a).attr('href') || '';
-    const m = href.match(/code=(\d{6})/);
+    const m = ($(a).attr('href') || '').match(/code=(\d{6})/);
     if (!m) return;
     const code = m[1];
-    if (seen.has(code)) return;
     const name = $(a).text().replace(/\s+/g, ' ').trim();
-    if (!name) return;
+    if (!name || seen.has(code)) return;
     seen.add(code);
     out.push({ code, name });
   });
   return out;
 }
+
+const MARKET_NAME = ['KOSPI', 'KOSDAQ'];
+
+/** 시가총액 순위 페이지/ API 후보 목록. 위에서부터 시도해 처음 성공한 것을 쓴다. */
+function marketCapSources(page, sosok, perPage) {
+  const mk = MARKET_NAME[sosok];
+  return [
+    {
+      name: 'mobile-api',
+      url: `https://m.stock.naver.com/api/stocks/marketValue/${mk}?page=${page}&pageSize=${perPage}`,
+      parse: (text) => {
+        let j;
+        try { j = JSON.parse(text); } catch { return []; }
+        return collectStocksFromJson(j, [], new Set(), 0);
+      },
+    },
+    {
+      name: 'embedded-json',
+      url: `https://finance.naver.com/sise/sise_market_sum.naver?sosok=${sosok}&page=${page}`,
+      parse: (text) => extractStocksFromText(text),
+    },
+    {
+      name: 'legacy-anchors',
+      url: `https://finance.naver.com/sise/sise_market_sum.naver?sosok=${sosok}&page=${page}`,
+      parse: (text) => extractStocksFromAnchors(text),
+    },
+  ];
+}
+
+/** 마지막 스캔에서 어느 경로가 먹혔는지 — /api/diag에서 보여준다. */
+let LAST_UNIVERSE_SOURCE = null;
+
+async function fetchMarketCapPage(page, sosok, perPage) {
+  sosok = sosok === 1 ? 1 : 0; // 0=코스피, 1=코스닥
+  const sources = marketCapSources(page, sosok, perPage || 50);
+  const tried = [];
+  for (const src of sources) {
+    try {
+      const text = await withRetry(() => fetchHtml(src.url), 2, 600);
+      const rows = src.parse(text);
+      if (rows.length) {
+        LAST_UNIVERSE_SOURCE = src.name;
+        return rows;
+      }
+      tried.push(`${src.name}: 0건`);
+    } catch (e) {
+      tried.push(`${src.name}: ${e.message}`);
+    }
+  }
+  throw new Error(tried.join(' | '));
+}
+
+/**
+ * 마지막으로 성공한 시가총액 순위. 12시간 캐시와 달리 만료가 없다.
+ *
+ * 겪은 문제: 낮에는 잘 되다가 저녁에 "시가총액 순위를 가져오지 못했습니다"로 죽었다.
+ * 시가총액 상위 100~150위 구성은 하루 사이에 거의 안 바뀌는데, 네이버가 잠깐
+ * 막거나 점검에 들어가면 스캔 전체가 통째로 실패했다. 그럴 바엔 좀 지난 목록으로라도
+ * 돌리는 게 낫다 — 대신 응답에 stale 표시를 남겨서 오래된 목록임을 알 수 있게 한다.
+ */
+const LAST_GOOD_UNIVERSE = new Map(); // key -> { list, at }
 
 // 단일 시장(코스피 또는 코스닥) 안에서 시가총액 상위 n개를 모은다.
 async function fetchMarketCapSingle(n, sosok) {
@@ -522,8 +678,11 @@ async function fetchMarketCapSingle(n, sosok) {
 
   const perPage = 50;
   const pages = Math.ceil(n / perPage);
+  // 실패 이유를 삼키지 않는다 — 어디서 왜 막혔는지 알아야 고칠 수 있다.
+  const errors = [];
   const results = await Promise.all(
-    Array.from({ length: pages }, (_, i) => fetchMarketCapPage(i + 1, sosok).catch(() => []))
+    Array.from({ length: pages }, (_, i) =>
+      fetchMarketCapPage(i + 1, sosok, perPage).catch(e => { errors.push(`p${i + 1}: ${e.message}`); return []; }))
   );
   const seen = new Set();
   const merged = [];
@@ -535,8 +694,25 @@ async function fetchMarketCapSingle(n, sosok) {
     }
   }
   const out = merged.slice(0, n);
-  histCacheSet(cacheKey, out);
-  return out;
+
+  if (out.length) {
+    histCacheSet(cacheKey, out);
+    LAST_GOOD_UNIVERSE.set(cacheKey, { list: out, at: Date.now() });
+    return out;
+  }
+
+  // 한 종목도 못 건졌다 → 마지막 성공 목록으로 대체한다.
+  const fallback = LAST_GOOD_UNIVERSE.get(cacheKey);
+  if (fallback) {
+    const ageH = Math.round((Date.now() - fallback.at) / 3600000 * 10) / 10;
+    console.error(`시가총액 순위 수집 실패(${marketName}) — ${ageH}시간 전 목록으로 대체. 원인: ${errors.join(' | ') || '알 수 없음'}`);
+    const stale = fallback.list.slice();
+    stale.staleHours = ageH;
+    return stale;
+  }
+  const e = new Error(`시가총액 순위(${marketName}) 수집 실패 — ${errors.join(' | ') || '페이지는 받았으나 종목 링크를 하나도 찾지 못함(마크업 변경 가능성)'}`);
+  e.universeFailure = true;
+  throw e;
 }
 
 /**
@@ -551,11 +727,21 @@ async function fetchMarketCapUniverse(n, market) {
   market = market === 'KOSDAQ' ? 'KOSDAQ' : market === 'ALL' ? 'ALL' : 'KOSPI';
   if (market === 'ALL') {
     const half = Math.ceil(n / 2);
-    const [kospi, kosdaq] = await Promise.all([
+    // 한쪽 시장이 실패해도 다른 쪽만으로 스캔은 돌린다 — 둘 다 실패할 때만 던진다.
+    const [k, d] = await Promise.allSettled([
       fetchMarketCapSingle(half, 0),
       fetchMarketCapSingle(half, 1),
     ]);
-    return [...kospi, ...kosdaq].slice(0, n);
+    const kospi = k.status === 'fulfilled' ? k.value : [];
+    const kosdaq = d.status === 'fulfilled' ? d.value : [];
+    if (!kospi.length && !kosdaq.length) {
+      throw new Error('시가총액 순위 수집 실패 — 코스피: '
+        + (k.reason ? k.reason.message : '빈 결과') + ' / 코스닥: '
+        + (d.reason ? d.reason.message : '빈 결과'));
+    }
+    const out = [...kospi, ...kosdaq].slice(0, n);
+    out.staleHours = kospi.staleHours || kosdaq.staleHours || undefined;
+    return out;
   }
   return fetchMarketCapSingle(n, market === 'KOSDAQ' ? 1 : 0);
 }
@@ -710,7 +896,7 @@ async function runScreen(opt) {
 
   const universe = await fetchMarketCapUniverse(opt.universeN, opt.market);
   if (!universe.length) {
-    throw new Error('시가총액 순위를 가져오지 못했습니다. 잠시 후 다시 시도하거나 /api/universe-raw로 원본을 확인하십시오.');
+    throw new Error('시가총액 순위를 가져오지 못했습니다. /api/diag로 어느 소스가 막혔는지 확인하십시오.');
   }
   const results = [];
   for (let i = 0; i < universe.length; i += SCREEN_BATCH) {
@@ -769,6 +955,7 @@ async function runScreen(opt) {
     out = {
       date: today,
       universeSize: universe.length,
+      universeStaleHours: universe.staleHours ?? null,
       consideredCount: scored.length,
       skippedCount,
       passedCount: poolKospi.length + poolKosdaq.length,
@@ -789,6 +976,7 @@ async function runScreen(opt) {
     out = {
       date: today,
       universeSize: universe.length,
+      universeStaleHours: universe.staleHours ?? null,
       consideredCount: scored.length,
       skippedCount,
       passedCount: pool.length,
@@ -802,7 +990,7 @@ async function runScreen(opt) {
   // 성과검증은 부가 기능이다 — 여기서 실패해도(Upstash 설정 오류 등) 스캔 결과 자체는
   // 정상적으로 돌려줘야 한다. 실패는 조용히 넘어가되, 원인 파악용으로 콘솔에는 남긴다.
   try {
-    await recordRecommendation(today, opt, out.candidates);
+    await recordRecommendation(today, opt, out.candidates, 'value');
   } catch (e) {
     console.error('추천 기록 저장 실패(스캔 결과에는 영향 없음):', e.message);
   }
@@ -810,7 +998,499 @@ async function runScreen(opt) {
   return out;
 }
 
+/* ═════════════════════ 모멘텀 스크리너 (사용자 정의 조건식) ═════════════════════
+ *
+ * 저평가·수급 스크리너는 재무 데이터로 순위를 매기기 때문에, 분기 실적이 바뀌기
+ * 전까지는 며칠을 돌려도 거의 같은 종목이 나온다(실제로 이틀 연속 같은 6종목).
+ * 이쪽은 일봉 지표의 "그날의 돌파"를 보므로
+ * 후보가 매일 바뀐다. 두 탭은 성격이 반대라 같이 쓰는 편이 낫다.
+ *
+ * 데이터: 종목당 일봉 약 120거래일. 네이버 차트 API(요청 1건)를 먼저 쓰고,
+ * 형식이 바뀌어 실패하면 기존 시세 HTML 페이지(요청 여러 건)로 자동 대체한다.
+ *
+ * 조건식 자체는 이 파일에 없다 — loadMomentumConfig()가 환경변수나 로컬 파일에서 읽어온다.
+ */
+
+const OHLCV_BATCH = 6;
+const OHLCV_DAYS = 200;      // 달력일 기준 — 지표 워밍업에 필요한 거래일 확보용
+
+/* ───────────── 조건 정의 불러오기 ─────────────
+ *
+ * 조건식은 이 저장소 안에 두지 않는다. 저장소가 공개되면 조건식도 같이 공개되기 때문이다.
+ * 우선순위:
+ *   1) 환경변수 MOMENTUM_CONDITIONS  (JSON 문자열) — Render 배포용
+ *   2) conditions.local.json          (.gitignore에 등록됨) — 로컬 개발용
+ *   3) 없으면 조건 없음 — 스캔은 돌아가지만 조건 판정 없이 섹터·거래량만으로 순위를 매긴다.
+ *
+ * 코드에는 기본 조건식을 넣지 않는다. 여기에 적어두면 숨기는 의미가 없다.
+ */
+let MOM_CONFIG_CACHE = null;
+
+function normalizeConditions(raw) {
+  if (!raw || !Array.isArray(raw.conditions)) return { label: null, conditions: [], source: raw.source };
+  const seen = new Set();
+  const conditions = raw.conditions
+    .filter(c => c && c.indicator && c.key != null)
+    .map((c, idx) => ({
+      key: String(c.key || String.fromCharCode(65 + idx)),
+      indicator: String(c.indicator),
+      params: c.params && typeof c.params === 'object' ? c.params : {},
+      type: String(c.type || 'above'),
+      level: Number.isFinite(Number(c.level)) ? Number(c.level) : null,  // rising/falling은 level이 없다
+      bars: c.bars ? Number(c.bars) : undefined,
+      desc: c.desc ? String(c.desc) : null,
+    }))
+    .filter(c => { if (seen.has(c.key)) return false; seen.add(c.key); return true; })
+    .slice(0, 12);
+  return { label: raw.label ? String(raw.label) : null, conditions, source: raw.source };
+}
+
+function loadMomentumConfig() {
+  if (MOM_CONFIG_CACHE) return MOM_CONFIG_CACHE;
+  let raw = null;
+  const env = (process.env.MOMENTUM_CONDITIONS || '').trim();
+  if (env) {
+    try { raw = JSON.parse(env); raw.source = 'env'; }
+    catch (e) { console.error('MOMENTUM_CONDITIONS 파싱 실패 — JSON 형식을 확인하십시오:', e.message); }
+  }
+  if (!raw) {
+    try {
+      const p = path.join(__dirname, 'conditions.local.json');
+      if (fs.existsSync(p)) { raw = JSON.parse(fs.readFileSync(p, 'utf8')); raw.source = 'file'; }
+    } catch (e) {
+      console.error('conditions.local.json 읽기 실패:', e.message);
+    }
+  }
+  MOM_CONFIG_CACHE = normalizeConditions(raw || { source: 'none' });
+  return MOM_CONFIG_CACHE;
+}
+
+/** 'YYYYMMDD' → 'YYYY-MM-DD' */
+function dashDate(s) {
+  return String(s).replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3');
+}
+function ymd(d) {
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
+}
+
+/**
+ * 네이버 차트 API. 응답이 정식 JSON이 아니라 작은따옴표가 섞인 JS 배열 리터럴이라
+ * JSON.parse가 안 된다. 행 패턴을 정규식으로 훑어 뽑는다 — 컬럼이 하나 늘거나
+ * 헤더 문구가 바뀌어도 앞의 6개 값(날짜·시가·고가·저가·종가·거래량)만 맞으면 버틴다.
+ */
+async function fetchOhlcvChartApi(code, days) {
+  const end = new Date();
+  const start = new Date(Date.now() - days * 86400000);
+  const url = `https://api.finance.naver.com/siseJson.naver?symbol=${code}&requestType=1`
+    + `&startTime=${ymd(start)}&endTime=${ymd(end)}&timeframe=day`;
+  const res = await fetch(url, { headers: { 'User-Agent': UA, Referer: 'https://finance.naver.com/' } });
+  if (!res.ok) throw new Error(`HTTP ${res.status} — chart api`);
+  const text = await res.text();
+
+  const rows = [];
+  const re = /\[\s*["']?(\d{8})["']?\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const [, d, o, h, l, c, v] = m;
+    const bar = {
+      date: dashDate(d),
+      open: Number(o), high: Number(h), low: Number(l),
+      close: Number(c), volume: Number(v),
+    };
+    if (bar.close > 0 && bar.high > 0 && bar.low > 0) rows.push(bar);
+  }
+  if (rows.length < 30) throw new Error('차트 API 응답에서 일봉을 충분히 읽지 못함 (' + rows.length + '개)');
+  rows.sort((a, b) => a.date.localeCompare(b.date));
+  return rows;
+}
+
+/** 대체 경로: 기존 일별시세 HTML 표. 한 페이지에 10거래일이라 페이지를 여러 번 받는다. */
+async function fetchOhlcvPageHtml(code, page) {
+  const url = `https://finance.naver.com/item/sise_day.naver?code=${code}&page=${page}`;
+  const html = await fetchHtml(url);
+  const $ = cheerio.load(html);
+  const out = [];
+  $('tr').each((_, tr) => {
+    const tds = $(tr).children('td');
+    if (tds.length < 7) return;
+    const dm = $(tds[0]).text().trim().match(/^(\d{4})\.(\d{2})\.(\d{2})$/);
+    if (!dm) return;
+    // 열 순서: 날짜 | 종가 | 전일비 | 시가 | 고가 | 저가 | 거래량
+    const close = toNum($(tds[1]).text());
+    const open = toNum($(tds[3]).text());
+    const high = toNum($(tds[4]).text());
+    const low = toNum($(tds[5]).text());
+    const volume = toNum($(tds[6]).text());
+    if (close == null || high == null || low == null) return;
+    out.push({ date: `${dm[1]}-${dm[2]}-${dm[3]}`, open: open ?? close, high, low, close, volume: volume ?? 0 });
+  });
+  return out;
+}
+
+async function fetchOhlcvHtml(code, needBars) {
+  const pages = Math.ceil(needBars / 10) + 1;
+  const results = [];
+  for (let p = 1; p <= pages; p += 5) {
+    const batch = [];
+    for (let k = p; k < p + 5 && k <= pages; k++) batch.push(k);
+    const r = await Promise.all(batch.map(n => fetchOhlcvPageHtml(code, n).catch(() => [])));
+    r.forEach(rows => results.push(...rows));
+  }
+  const byDate = new Map();
+  results.forEach(r => byDate.set(r.date, r));
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
+async function fetchOhlcv(code) {
+  const cacheKey = 'ohlcv:' + code;
+  const cached = histCacheGet(cacheKey);
+  if (cached) return cached;
+
+  let bars, source = 'chart-api';
+  try {
+    bars = await fetchOhlcvChartApi(code, OHLCV_DAYS);
+  } catch (e) {
+    source = 'html-fallback';
+    bars = await fetchOhlcvHtml(code, 130);
+  }
+  const out = { bars, source };
+  histCacheSet(cacheKey, out);
+  return out;
+}
+
+/* ───────────── 업종(섹터) 매핑과 섹터 강도 ─────────────
+ *
+ * "강한 섹터"를 사람 판단이 아니라 데이터로 정하기 위해, 네이버 업종 분류를 받아
+ * 유니버스 종목을 업종별로 묶은 뒤 구성종목의 최근 수익률 평균으로 순위를 매긴다.
+ * 업종 목록 1건 + 업종별 상세 약 40건 = 하루 한 번만 받으면 되므로 12시간 캐시한다.
+ */
+
+async function fetchSectorList() {
+  const url = 'https://finance.naver.com/sise/sise_group.naver?type=upjong';
+  const html = await fetchHtml(url);
+  const $ = cheerio.load(html);
+  const out = [];
+  const seen = new Set();
+  $('a[href*="sise_group_detail"]').each((_, a) => {
+    const href = $(a).attr('href') || '';
+    const m = href.match(/no=(\d+)/);
+    if (!m) return;
+    const no = m[1];
+    if (seen.has(no)) return;
+    const name = $(a).text().replace(/\s+/g, ' ').trim();
+    if (!name) return;
+    seen.add(no);
+    out.push({ no, name });
+  });
+  return out;
+}
+
+async function fetchSectorMembers(no) {
+  const url = `https://finance.naver.com/sise/sise_group_detail.naver?type=upjong&no=${no}`;
+  const html = await fetchHtml(url);
+  const $ = cheerio.load(html);
+  const codes = new Set();
+  $('a[href*="/item/main.naver?code="]').each((_, a) => {
+    const m = ($(a).attr('href') || '').match(/code=(\d{6})/);
+    if (m) codes.add(m[1]);
+  });
+  return [...codes];
+}
+
+/** { byCode: {code: 업종명}, sectors: [{no, name, memberCount}] } */
+async function fetchSectorMap() {
+  const cached = histCacheGet('sectormap');
+  if (cached) return cached;
+
+  const list = await fetchSectorList();
+  const byCode = {};
+  const sectors = [];
+  for (let i = 0; i < list.length; i += 6) {
+    const batch = list.slice(i, i + 6);
+    const res = await Promise.all(batch.map(s => fetchSectorMembers(s.no).catch(() => [])));
+    batch.forEach((s, k) => {
+      const codes = res[k];
+      codes.forEach(c => { if (!byCode[c]) byCode[c] = s.name; });
+      sectors.push({ no: s.no, name: s.name, memberCount: codes.length });
+    });
+  }
+  const out = { byCode, sectors, fetchedAt: new Date().toISOString() };
+  histCacheSet('sectormap', out);
+  return out;
+}
+
+/* ───────────── 스캔 본체 ───────────── */
+
+async function evaluateOne(item, opt, config) {
+  try {
+    const { bars, source } = await fetchOhlcv(item.code);
+    const ev = MC.evaluate(bars, config, { barsAgo: opt.barsAgo });
+    if (!ev.ok) return { code: item.code, name: item.name, market: item.market, skipped: ev.reason };
+    return { code: item.code, name: item.name, market: item.market || null, source, ...ev };
+  } catch (e) {
+    return { code: item.code, name: item.name, market: item.market, skipped: e.message };
+  }
+}
+
+/** 유니버스 평가 결과를 업종별로 묶어 "섹터 강도"를 매긴다. */
+function computeSectorStrength(rows, sectorByCode, minMembers) {
+  const groups = new Map();
+  rows.forEach(r => {
+    const name = sectorByCode[r.code];
+    if (!name) return;
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(r);
+  });
+  const list = [];
+  groups.forEach((members, name) => {
+    const r5 = members.map(m => m.ret5).filter(v => v != null);
+    const r20 = members.map(m => m.ret20).filter(v => v != null);
+    const above = members.filter(m => m.ma20 != null && m.close > m.ma20).length;
+    if (!r5.length) return;
+    const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
+    list.push({
+      name,
+      memberCount: members.length,
+      ret5: Math.round(mean(r5) * 100) / 100,
+      ret20: r20.length ? Math.round(mean(r20) * 100) / 100 : null,
+      aboveMa20Pct: Math.round((above / members.length) * 100),
+      reliable: members.length >= (minMembers || 3),
+    });
+  });
+
+  // 강도 점수 = 5일 수익률 백분위 70% + 20일 수익률 백분위 30%.
+  // 단기 돌파를 찾는 스크리너라 최근 5일에 더 비중을 뒀다.
+  const scored = list.filter(s => s.reliable);
+  const p5 = MC.percentileRanks(scored.map(s => s.ret5));
+  const p20 = MC.percentileRanks(scored.map(s => s.ret20 == null ? 0 : s.ret20));
+  scored.forEach((s, i) => { s.strength = Math.round((0.7 * p5[i] + 0.3 * p20[i]) * 1000) / 1000; });
+  scored.sort((a, b) => b.strength - a.strength);
+
+  const strengthByName = {};
+  scored.forEach(s => { strengthByName[s.name] = s.strength; });
+  // 구성종목이 적어 순위에서 뺀 업종은 중립(0.5)으로 둔다.
+  list.filter(s => !s.reliable).forEach(s => { s.strength = 0.5; strengthByName[s.name] = 0.5; });
+
+  return { sectors: scored, allSectors: list, strengthByName };
+}
+
+async function runMomentum(opt) {
+  const today = kstDate();
+  const config = loadMomentumConfig();
+  const cacheKey = 'mom:' + JSON.stringify(opt) + ':' + today;
+  const cached = histCacheGet(cacheKey);
+  if (cached) return cached;
+
+  const universe = await fetchMarketCapUniverse(opt.universeN, opt.market);
+  if (!universe.length) throw new Error('시가총액 순위를 가져오지 못했습니다. /api/diag로 어느 소스가 막혔는지 확인하십시오.');
+
+  // 업종 매핑은 실패해도 스캔 자체는 계속한다(섹터 가중치만 중립이 된다).
+  let sectorMap = { byCode: {}, sectors: [] };
+  let sectorError = null;
+  if (opt.weightSector > 0 || opt.keywords.length) {
+    try { sectorMap = await fetchSectorMap(); }
+    catch (e) { sectorError = e.message; }
+  }
+
+  const results = [];
+  for (let i = 0; i < universe.length; i += OHLCV_BATCH) {
+    const batch = universe.slice(i, i + OHLCV_BATCH);
+    results.push(...await Promise.all(batch.map(it => evaluateOne(it, opt, config))));
+  }
+
+  const rows = results.filter(r => !r.skipped);
+  const skippedCount = results.length - rows.length;
+  rows.forEach(r => { r.sector = sectorMap.byCode[r.code] || null; });
+
+  const sectorInfo = computeSectorStrength(rows, sectorMap.byCode, 3);
+
+  // ── 시장 국면 (유니버스 전체의 상태로 읽는다 — 지수를 따로 받지 않아도 된다)
+  const withMa = rows.filter(r => r.ma20 != null);
+  const aboveMa20Pct = withMa.length ? Math.round((withMa.filter(r => r.close > r.ma20).length / withMa.length) * 100) : null;
+  const withMa60 = rows.filter(r => r.ma60 != null);
+  const aboveMa60Pct = withMa60.length ? Math.round((withMa60.filter(r => r.close > r.ma60).length / withMa60.length) * 100) : null;
+  const r5s = rows.map(r => r.ret5).filter(v => v != null);
+  const avgRet5 = r5s.length ? Math.round((r5s.reduce((s, v) => s + v, 0) / r5s.length) * 100) / 100 : null;
+  const regime = aboveMa20Pct == null ? 'unknown'
+    : aboveMa20Pct >= 65 ? 'strong'
+    : aboveMa20Pct >= 45 ? 'neutral' : 'weak';
+
+  // 조건별 통과 수는 조건 정의에서 키를 읽어 만든다 — 코드에 조건이 박혀 있지 않다.
+  const condCount = config.conditions.length;
+  const byCondition = {};
+  config.conditions.forEach(c => { byCondition[c.key] = rows.filter(r => r.conds && r.conds[c.key]).length; });
+  const funnel = {
+    evaluated: rows.length,
+    byCondition,
+    strict: rows.filter(r => r.strict).length,
+    nearMiss: condCount > 1 ? rows.filter(r => r.passCount === condCount - 1).length : 0,
+    liquidityPassed: rows.filter(r => r.avgTurnoverEok == null || r.avgTurnoverEok >= opt.minTurnoverEok).length,
+  };
+
+  // ── 점수: 조건충족수 · 섹터강도 · 거래량비율 백분위의 가중합 + 테마 키워드 가점
+  const kw = opt.keywords.map(k => k.trim()).filter(Boolean);
+  const matchKeyword = (r) => kw.some(k => (r.name || '').includes(k) || (r.sector || '').includes(k));
+
+  const rankPool = (list) => {
+    // minPassCount는 "조건 몇 개 이상"인데, 조건 개수보다 크게 잡히면 아무것도 안 남는다.
+    const minPass = Math.min(opt.minPassCount, condCount);
+    const filtered = list.filter(r =>
+      (r.avgTurnoverEok == null || r.avgTurnoverEok >= opt.minTurnoverEok) &&
+      r.passCount >= minPass
+    );
+    const pVol = MC.percentileRanks(filtered.map(r => r.volumeRatio == null ? 0 : r.volumeRatio));
+    filtered.forEach((r, i) => {
+      r.sectorStrength = r.sector ? (sectorInfo.strengthByName[r.sector] ?? 0.5) : 0.5;
+      r.volumePct = Math.round(pVol[i] * 1000) / 1000;
+      r.keywordHit = matchKeyword(r);
+      r.score = Math.round((
+        opt.weightCond * (condCount ? r.passCount / condCount : 0) +
+        opt.weightSector * r.sectorStrength +
+        opt.weightVolume * pVol[i] +
+        (r.keywordHit ? opt.weightKeyword : 0)
+      ) * 1000) / 1000;
+    });
+    // 조건식을 전부 만족한 종목(strict)을 무조건 앞에 세우고, 그 안에서 점수순.
+    filtered.sort((a, b) => (Number(b.strict) - Number(a.strict)) || (b.score - a.score));
+    return filtered;
+  };
+
+  // 지표 이름을 응답에 박아두지 않는다 — 조건 키(A, B…)와 그 값만 넘기고,
+  // 무슨 지표인지는 조건 정의를 읽을 수 있는 사람(=소유자)만 알 수 있다.
+  const slim = (r) => ({
+    code: r.code, name: r.name, market: r.market, sector: r.sector,
+    date: r.date, close: r.close,
+    conds: r.conds, values: r.values, passCount: r.passCount, condCount: r.condCount, strict: r.strict,
+    volumeRatio: round2(r.volumeRatio), avgTurnoverEok: round2(r.avgTurnoverEok),
+    ret1: round2(r.ret1), ret5: round2(r.ret5), ret20: round2(r.ret20),
+    aboveMa20: r.ma20 == null ? null : r.close > r.ma20,
+    sectorStrength: r.sectorStrength, keywordHit: r.keywordHit, score: r.score,
+    price: r.close, // 성과검증이 price 필드를 쓴다
+  });
+
+  const poolKospi = rankPool(rows.filter(r => r.market === 'KOSPI')).map(slim);
+  const poolKosdaq = rankPool(rows.filter(r => r.market === 'KOSDAQ')).map(slim);
+  const N = opt.topN;
+
+  const out = {
+    date: today,
+    barsAgo: opt.barsAgo,
+    asOfBarDate: rows.length ? rows[0].date : null,
+    universeSize: universe.length,
+    universeStaleHours: universe.staleHours ?? null,
+    consideredCount: rows.length,
+    skippedCount,
+    conditionsConfigured: condCount > 0,
+    conditionSource: config.source || 'none',
+    funnel,
+    market: {
+      regime, aboveMa20Pct, aboveMa60Pct, avgRet5,
+      strictCount: funnel.strict,
+      condCount,
+    },
+    sectorTop: sectorInfo.sectors.slice(0, 8),
+    sectorBottom: sectorInfo.sectors.slice(-5).reverse(),
+    sectorError,
+    candidatesKospi: poolKospi.slice(0, N),
+    candidatesKosdaq: poolKosdaq.slice(0, N),
+    runnerUpsKospi: poolKospi.slice(N, N + 10),
+    runnerUpsKosdaq: poolKosdaq.slice(N, N + 10),
+    candidates: [...poolKospi.slice(0, N), ...poolKosdaq.slice(0, N)],
+    opt,
+  };
+
+  try {
+    await recordRecommendation(today, opt, out.candidates, 'momentum');
+  } catch (e) {
+    console.error('모멘텀 추천 기록 저장 실패(스캔 결과에는 영향 없음):', e.message);
+  }
+  histCacheSet(cacheKey, out);
+  return out;
+}
+
+function round2(v) {
+  return (v == null || !isFinite(v)) ? null : Math.round(v * 100) / 100;
+}
+
+app.get('/api/momentum', checkStatsAuth, async (req, res) => {
+  const numParam = (raw, def) => {
+    if (raw === undefined || raw === '') return def;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : def;
+  };
+
+  let wCond = Math.max(0, numParam(req.query.weightCond, 40));
+  let wSector = Math.max(0, numParam(req.query.weightSector, 30));
+  let wVolume = Math.max(0, numParam(req.query.weightVolume, 20));
+  let wKeyword = Math.max(0, numParam(req.query.weightKeyword, 10));
+  const wSum = wCond + wSector + wVolume + wKeyword;
+  if (wSum <= 0) { wCond = 0.4; wSector = 0.3; wVolume = 0.2; wKeyword = 0.1; }
+  else { wCond /= wSum; wSector /= wSum; wVolume /= wSum; wKeyword /= wSum; }
+
+  const opt = {
+    universeN: Math.min(300, Math.max(10, Math.round(numParam(req.query.n, 150)))),
+    market: req.query.market === 'KOSPI' ? 'KOSPI' : req.query.market === 'KOSDAQ' ? 'KOSDAQ' : 'ALL',
+    barsAgo: numParam(req.query.barsAgo, 0) >= 1 ? 1 : 0,
+    minTurnoverEok: Math.max(0, numParam(req.query.minTurnover, 30)),
+    minPassCount: Math.min(5, Math.max(0, Math.round(numParam(req.query.minPass, 3)))),
+    topN: Math.min(10, Math.max(1, Math.round(numParam(req.query.topN, 3)))),
+    keywords: String(req.query.keywords || '').split(/[,\s]+/).map(s => s.trim()).filter(Boolean).slice(0, 12),
+    weightCond: wCond, weightSector: wSector, weightVolume: wVolume, weightKeyword: wKeyword,
+  };
+
+  try {
+    res.json(await runMomentum(opt));
+  } catch (e) {
+    res.status(502).json({ error: e.message, stack: (e.stack || '').split('\n').slice(0, 4) });
+  }
+});
+
 /* ───────────────────────── 디버그 ───────────────────────── */
+
+/**
+ * 조건 정의를 화면에 뿌려주는 엔드포인트. 인증이 걸려 있으므로 소유자만 볼 수 있고,
+ * 정의 자체는 저장소가 아니라 환경변수/로컬 파일에서 온다.
+ */
+app.get('/api/momentum/conditions', checkStatsAuth, (req, res) => {
+  const c = loadMomentumConfig();
+  res.json({
+    configured: c.conditions.length > 0,
+    source: c.source || 'none',
+    label: c.label,
+    conditions: c.conditions.map(x => ({
+      key: x.key, desc: x.desc, indicator: x.indicator,
+      params: x.params, type: x.type, level: x.level, bars: x.bars,
+    })),
+    availableIndicators: Object.keys(MC.INDICATORS),
+    availableTypes: ['crossUp', 'crossDown', 'above', 'below', 'rising', 'falling'],
+  });
+});
+
+app.get('/api/ohlcv/:code', checkStatsAuth, async (req, res) => {
+  try {
+    const { bars, source } = await fetchOhlcv(req.params.code);
+    const ev = MC.evaluate(bars, loadMomentumConfig(), { barsAgo: Number(req.query.barsAgo) >= 1 ? 1 : 0 });
+    res.json({ code: req.params.code, source, barCount: bars.length, last5: bars.slice(-5), evaluation: ev });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
+app.get('/api/sectors-raw', checkStatsAuth, async (req, res) => {
+  try {
+    const m = await fetchSectorMap();
+    res.json({
+      sectorCount: m.sectors.length,
+      mappedCodes: Object.keys(m.byCode).length,
+      fetchedAt: m.fetchedAt,
+      sectors: m.sectors,
+      sample: Object.entries(m.byCode).slice(0, 10),
+    });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
 
 app.get('/api/raw/:code', async (req, res) => {
   const code = String(req.params.code).replace(/\D/g, '');
@@ -836,15 +1516,89 @@ app.get('/api/history-raw/:code', async (req, res) => {
   }
 });
 
+/**
+ * 데이터 소스 점검. "낮엔 되다가 밤에 안 된다"처럼 시간대에 따라 달라지는 문제는,
+ * 어느 소스가 어떤 상태 코드로 막혔는지 봐야 원인을 알 수 있다.
+ * 각 소스에 1건씩만 요청해서 상태·응답크기·파싱 결과를 그대로 보여준다.
+ */
+app.get('/api/diag', async (req, res) => {
+  const UA_H = { 'User-Agent': UA, 'Accept-Language': 'ko-KR,ko;q=0.9', Referer: 'https://finance.naver.com/' };
+  const probe = async (name, url, check) => {
+    const t0 = Date.now();
+    try {
+      const r = await fetch(url, { headers: UA_H, redirect: 'follow' });
+      const buf = Buffer.from(await r.arrayBuffer());
+      const text = buf.toString('utf8');
+      return {
+        source: name, ok: r.ok, status: r.status, ms: Date.now() - t0,
+        bytes: buf.length,
+        parsed: check ? check(text, buf) : null,
+        contentType: r.headers.get('content-type') || null,
+        // 차단 페이지는 보통 짧고 안내 문구가 들어 있다 — 앞부분을 그대로 보여준다.
+        head: buf.length < 4000 ? text.slice(0, 300).replace(/\s+/g, ' ') : null,
+      };
+    } catch (e) {
+      return { source: name, ok: false, status: null, ms: Date.now() - t0, error: e.message };
+    }
+  };
+
+  // 시가총액 순위는 수집 경로가 여러 개라, 경로별로 몇 종목을 뽑아냈는지 각각 보여준다.
+  const capProbes = [];
+  for (const sosok of [0, 1]) {
+    for (const src of marketCapSources(1, sosok, 50)) {
+      capProbes.push(probe(`시가총액(${MARKET_NAME[sosok]}) ${src.name}`, src.url,
+        t => { try { return src.parse(t).length + '종목'; } catch (e) { return '파싱 오류: ' + e.message; } }));
+    }
+  }
+
+  const results = await Promise.all([
+    ...capProbes,
+    probe('종목페이지(삼성전자)', 'https://finance.naver.com/item/main.naver?code=005930', t => /no_today/.test(t) ? '현재가 영역 있음' : '현재가 영역 없음'),
+    probe('수급(삼성전자)', 'https://stock.naver.com/api/domestic/detail/005930/trend?tradeType=KRX&startIdx=0&pageSize=5', t => { try { return JSON.parse(t).length + '행'; } catch { return 'JSON 아님'; } }),
+    probe('일봉 차트API(삼성전자)', 'https://api.finance.naver.com/siseJson.naver?symbol=005930&requestType=1&timeframe=day', t => ((t.match(/\["?\d{8}/g) || []).length) + '봉'),
+    probe('일별시세HTML(삼성전자)', 'https://finance.naver.com/item/sise_day.naver?code=005930&page=1', t => ((t.match(/\d{4}\.\d{2}\.\d{2}/g) || []).length) + '개 날짜셀'),
+    probe('업종목록', 'https://finance.naver.com/sise/sise_group.naver?type=upjong', t => ((t.match(/sise_group_detail/g) || []).length) + '개 업종링크'),
+    probe('FnGuide(삼성전자)', 'https://comp.fnguide.com/SVO2/ASP/SVD_Main.asp?pGB=1&gicode=A005930', t => /highlight_D_A/.test(t) ? '재무표 있음' : '재무표 없음'),
+  ]);
+
+  res.json({
+    at: new Date().toISOString(),
+    kst: kstDate(),
+    healthy: results.filter(r => r.ok).length + '/' + results.length,
+    universeSourceInUse: LAST_UNIVERSE_SOURCE,
+    lastGoodUniverse: [...LAST_GOOD_UNIVERSE.entries()].map(([k, v]) => ({
+      key: k, count: v.list.length, ageHours: Math.round((Date.now() - v.at) / 3600000 * 10) / 10,
+    })),
+    results,
+  });
+});
+
 app.get('/api/universe-raw', async (req, res) => {
   const page = Number(req.query.page) || 1;
   const sosok = req.query.market === 'KOSDAQ' ? 1 : 0;
-  try {
-    const url = `https://finance.naver.com/sise/sise_market_sum.naver?sosok=${sosok}&page=${page}`;
-    res.type('text/plain').send(await fetchHtml(url));
-  } catch (e) {
-    res.status(502).send(e.message);
+  const sources = marketCapSources(page, sosok, 50);
+
+  // ?raw=<경로이름> 이면 그 경로의 원문을 그대로 준다(파서를 고칠 때 필요).
+  const rawWanted = String(req.query.raw || '');
+  if (rawWanted) {
+    const src = sources.find(x => x.name === rawWanted);
+    if (!src) return res.status(400).send('경로 이름: ' + sources.map(x => x.name).join(', '));
+    try { return res.type('text/plain').send(await fetchHtml(src.url)); }
+    catch (e) { return res.status(502).send(e.message); }
   }
+
+  // 기본은 경로별로 몇 종목을 뽑았는지 요약해서 보여준다 — 원문은 너무 길어서 읽기 어렵다.
+  const out = [];
+  for (const src of sources) {
+    try {
+      const text = await fetchHtml(src.url);
+      const rows = src.parse(text);
+      out.push({ source: src.name, url: src.url, bytes: text.length, count: rows.length, sample: rows.slice(0, 5) });
+    } catch (e) {
+      out.push({ source: src.name, url: src.url, error: e.message });
+    }
+  }
+  res.json({ page, market: MARKET_NAME[sosok], sources: out, hint: '원문이 필요하면 ?raw=경로이름 을 붙이십시오.' });
 });
 
 app.get('/api/flow-raw/:code', async (req, res) => {
@@ -873,39 +1627,50 @@ app.get('/api/flow-raw/:code', async (req, res) => {
  * 하나만 남기는 식이다.
  */
 
-const RECO_MEM = new Map(); // Upstash 없을 때 쓰는 메모리 저장소: date -> {date, opt, candidates}
+const RECO_MEM = new Map(); // Upstash 없을 때 쓰는 메모리 저장소: 'kind:date' -> {date, opt, candidates}
 
-async function recordRecommendation(date, opt, candidates) {
+// 저평가 스크리너와 모멘텀 스크리너는 같은 날 각자 추천을 남긴다.
+// 한쪽이 다른 쪽 기록을 덮어쓰지 않도록 키 앞에 종류를 붙인다.
+// (기존 기록과의 호환을 위해 저평가 쪽 접두어는 예전 그대로 'reco'를 쓴다.)
+function recoNs(kind) { return kind === 'momentum' ? 'mreco' : 'reco'; }
+
+async function recordRecommendation(date, opt, candidates, kind) {
   if (!candidates || !candidates.length) return;
+  const ns = recoNs(kind);
   const payload = {
-    date, opt,
+    date, kind: kind || 'value', opt,
     candidates: candidates.map(c => ({
       code: c.code, name: c.name, market: c.market || null,
-      price: c.price, fairPrice: c.fairPrice, gapPct: c.gapPct, score: c.score,
+      price: c.price, fairPrice: c.fairPrice ?? null, gapPct: c.gapPct ?? null, score: c.score,
     })),
   };
   if (hasRedis()) {
-    await redisSetBody('reco:' + date, JSON.stringify(payload));
-    await redisCmd('SADD', 'reco:dates', date);
+    await redisSetBody(ns + ':' + date, JSON.stringify(payload));
+    await redisCmd('SADD', ns + ':dates', date);
   } else {
-    RECO_MEM.set(date, payload);
+    RECO_MEM.set(ns + ':' + date, payload);
   }
 }
 
-async function getRecommendation(date) {
+async function getRecommendation(date, kind) {
+  const ns = recoNs(kind);
   if (hasRedis()) {
-    const raw = await redisCmd('GET', 'reco:' + date);
+    const raw = await redisCmd('GET', ns + ':' + date);
     return raw ? JSON.parse(raw) : null;
   }
-  return RECO_MEM.get(date) || null;
+  return RECO_MEM.get(ns + ':' + date) || null;
 }
 
-async function listRecommendationDates() {
+async function listRecommendationDates(kind) {
+  const ns = recoNs(kind);
   if (hasRedis()) {
-    const dates = await redisCmd('SMEMBERS', 'reco:dates');
+    const dates = await redisCmd('SMEMBERS', ns + ':dates');
     return (dates || []).slice().sort().reverse();
   }
-  return [...RECO_MEM.keys()].sort().reverse();
+  return [...RECO_MEM.keys()]
+    .filter(k => k.startsWith(ns + ':'))
+    .map(k => k.slice(ns.length + 1))
+    .sort().reverse();
 }
 
 /**
@@ -927,8 +1692,8 @@ async function priceAsOf(code, asOfDate) {
   return { price: last.close, actualDate: last.date, isLive: false };
 }
 
-async function computePerformance(recoDate, asOfDate, selectedCodes) {
-  const reco = await getRecommendation(recoDate);
+async function computePerformance(recoDate, asOfDate, selectedCodes, kind) {
+  const reco = await getRecommendation(recoDate, kind);
   if (!reco) {
     const e = new Error('그 날짜의 추천 기록이 없습니다. /api/performance/dates로 기록이 있는 날짜를 확인하십시오.');
     e.notFound = true;
@@ -960,6 +1725,7 @@ async function computePerformance(recoDate, asOfDate, selectedCodes) {
 
   return {
     recoDate, asOfDate,
+    kind: kind || 'value',
     recoOpt: reco.opt,
     stocks,
     selectedCodes: wantAll ? stocks.map(s => s.code) : selectedCodes,
@@ -969,7 +1735,8 @@ async function computePerformance(recoDate, asOfDate, selectedCodes) {
 
 app.get('/api/performance/dates', checkStatsAuth, async (req, res) => {
   try {
-    res.json({ dates: await listRecommendationDates(), persisted: hasRedis() });
+    const kind = req.query.kind === 'momentum' ? 'momentum' : 'value';
+    res.json({ kind, dates: await listRecommendationDates(kind), persisted: hasRedis() });
   } catch (e) {
     res.status(502).json({ error: e.message });
   }
@@ -985,7 +1752,8 @@ app.get('/api/performance', checkStatsAuth, async (req, res) => {
     ? String(req.query.codes).split(',').map(s => s.trim()).filter(Boolean)
     : null;
   try {
-    res.json(await computePerformance(recoDate, asOfDate, selectedCodes));
+    const kind = req.query.kind === 'momentum' ? 'momentum' : 'value';
+    res.json(await computePerformance(recoDate, asOfDate, selectedCodes, kind));
   } catch (e) {
     res.status(e.notFound ? 404 : 502).json({ error: e.message });
   }
@@ -1283,4 +2051,13 @@ module.exports = {
   fetchNaverHistoryPage, fetchNaverHistory, getFundamentals, searchByNaverPage,
   fetchMarketCapPage, fetchMarketCapSingle, fetchMarketCapUniverse, fetchInvestorFlow, screenOne, runScreen, percentileRanks,
   recordRecommendation, getRecommendation, listRecommendationDates, priceAsOf, computePerformance, hasRedis,
+  fetchOhlcv, fetchOhlcvChartApi, fetchOhlcvHtml, fetchSectorMap, fetchSectorList, fetchSectorMembers,
+  evaluateOne, computeSectorStrength, runMomentum, loadMomentumConfig, normalizeConditions,
+  withRetry, fetchMarketCapPage, collectStocksFromJson, extractStocksFromText, extractStocksFromAnchors,
+  // 테스트에서 캐시 상태를 리셋하기 위한 것. alsoLastGood=true면 '마지막 성공 목록'까지 지운다.
+  __clearCaches(alsoLastGood) {
+    cache.clear();
+    histCache.clear();
+    if (alsoLastGood) LAST_GOOD_UNIVERSE.clear();
+  },
 };
