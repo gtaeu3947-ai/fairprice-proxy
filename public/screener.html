@@ -345,7 +345,10 @@
       + '종목(데이터 부족 제외 ' + d.skippedCount + ') · 조건 통과 ' + d.passedCount + '종목'
       + ' [저평가 ' + f.undervalued + ' → 저평가폭 통과 ' + f.passedGap
       + ' | 수급데이터 있음 ' + f.flowDataAvailable + ' → 수급강도 통과 ' + f.passedFlow
-      + ' → 거래량비율 통과 ' + f.passedVolume + ']' + staleMsg);
+      + ' → 거래량비율 통과 ' + f.passedVolume + ']' + staleMsg
+      + ((d.skipReasons && d.skipReasons.length && d.consideredCount === 0)
+          ? ' ⚠ 제외 사유: ' + d.skipReasons.map(function(x){ return x.reason + ' ' + x.count + '건'; }).join(', ')
+          : ''));
 
     $('resultSec').style.display = 'block';
     $('scanMeta').textContent = d.date + ' 종가 기준';
