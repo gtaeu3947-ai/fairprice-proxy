@@ -1834,7 +1834,28 @@ app.get('/api/flow/:code', checkStatsAuth, async (req, res) => {
   }
 });
 
-app.get('/api/health', (_, res) => res.json({ ok: true, cache: cache.size, at: new Date().toISOString() }));
+/**
+ * 배포 확인용 표식.
+ * "고쳤는데 왜 그대로냐"의 원인이 대부분 "아직 예전 코드가 돌고 있다"였다.
+ * BUILD를 올려두면 /api/health만 열어봐도 지금 무엇이 떠 있는지 바로 알 수 있다.
+ */
+const BUILD = '2026-09-10 시가총액 수집 3경로 + 조건식 외부화';
+
+app.get('/api/health', (_, res) => res.json({
+  ok: true,
+  build: BUILD,
+  features: {
+    momentumTab: true,              // 모멘텀·섹터 스크리너
+    conditionsExternalized: true,   // 조건식을 환경변수/로컬파일에서 로드
+    conditionsConfigured: loadMomentumConfig().conditions.length > 0,
+    conditionSource: loadMomentumConfig().source || 'none',
+    universeMultiSource: true,      // 시가총액 수집 3경로
+    diagEndpoint: true,             // /api/diag
+  },
+  universeSourceInUse: LAST_UNIVERSE_SOURCE,
+  cache: cache.size,
+  at: new Date().toISOString(),
+}));
 
 /* ───────────────────────── 방문자 통계 ─────────────────────────
  *
