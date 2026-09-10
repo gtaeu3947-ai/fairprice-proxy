@@ -135,6 +135,123 @@ function rowByLabel($, patterns) {
 
 /* ───────────────────────── 네이버 금융 ───────────────────────── */
 
+/* ───────────── 종목 기본정보: API 우선, HTML은 예비 ─────────────
+ *
+ * 2026-09, 네이버가 종목 페이지(item/main.naver)도 Next.js로 재구축하면서
+ * #_nowVal, p.no_today 같은 현재가 요소가 HTML에서 사라졌다. 현재가를 못 읽으니
+ * 저평가 스크리너가 전 종목을 "데이터 부족"으로 탈락시켰고 계산기도 멈췄다.
+ *
+ * 그래서 JSON API를 먼저 쓴다. 마크업과 달리 API 응답은 화면 개편에 잘 흔들리지 않고,
+ * 키 이름만 보고 찾으므로 감싸는 구조가 바뀌어도 버틴다.
+ */
+
+/** JSON 어디에 묻혀 있든 키 이름 패턴으로 값을 찾아낸다. */
+function findValueByKey(node, keyRe, depth) {
+  if (node == null || (depth || 0) > 8) return null;
+  if (Array.isArray(node)) {
+    for (const v of node) {
+      const r = findValueByKey(v, keyRe, (depth || 0) + 1);
+      if (r != null) return r;
+    }
+    return null;
+  }
+  if (typeof node !== 'object') return null;
+
+  for (const [k, v] of Object.entries(node)) {
+    if (keyRe.test(k) && (typeof v === 'string' || typeof v === 'number')) {
+      const n = toNum(v);
+      if (n != null) return n;
+    }
+  }
+  // 네이버 API는 { key: "상장주식수", value: "5,969,782,550" } 형태의 목록도 쓴다.
+  const label = node.key ?? node.title ?? node.name;
+  const value = node.value ?? node.currentValue;
+  if (typeof label === 'string' && keyRe.test(label) && value != null) {
+    const n = toNum(value);
+    if (n != null) return n;
+  }
+  for (const v of Object.values(node)) {
+    if (v && typeof v === 'object') {
+      const r = findValueByKey(v, keyRe, (depth || 0) + 1);
+      if (r != null) return r;
+    }
+  }
+  return null;
+}
+
+function findStringByKey(node, keyRe, depth) {
+  if (node == null || (depth || 0) > 8) return null;
+  if (Array.isArray(node)) {
+    for (const v of node) {
+      const r = findStringByKey(v, keyRe, (depth || 0) + 1);
+      if (r) return r;
+    }
+    return null;
+  }
+  if (typeof node !== 'object') return null;
+  for (const [k, v] of Object.entries(node)) {
+    if (keyRe.test(k) && typeof v === 'string' && v.trim() && !/^[\d,.\-]+$/.test(v)) return v.trim();
+  }
+  for (const v of Object.values(node)) {
+    if (v && typeof v === 'object') {
+      const r = findStringByKey(v, keyRe, (depth || 0) + 1);
+      if (r) return r;
+    }
+  }
+  return null;
+}
+
+async function fetchJson(url, referer) {
+  const r = await fetch(url, {
+    headers: { 'User-Agent': UA, 'Accept-Language': 'ko-KR,ko;q=0.9', Referer: referer || 'https://m.stock.naver.com/' },
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const text = await r.text();
+  try { return JSON.parse(text); }
+  catch { throw new Error('JSON 아님: ' + text.slice(0, 120)); }
+}
+
+const PRICE_KEY = /^(close|now|current|trade|last)?price$|^nowVal$|^closePrice$/i;
+const STOCK_NAME_KEY = /^(stock|item)?name$/i;
+const SHARES_KEY = /listed.*(stock|share).*(count|cnt)|stockTotCnt|shareTotCnt|상장주식수/i;
+const BPS_KEY = /^bps$/i;
+
+/**
+ * 종목 기본정보를 JSON API에서 가져온다.
+ * 세 경로를 모두 시도하고 얻은 값을 합친다 — 한 경로가 죽어도 나머지로 메운다.
+ * 특히 마지막 trend API는 수급 스크리너가 이미 쓰고 있어 동작이 검증된 경로라,
+ * 현재가만큼은 여기서라도 확보된다.
+ */
+async function fromNaverApi(code) {
+  const attempts = [
+    { name: 'basic', url: `https://m.stock.naver.com/api/stock/${code}/basic` },
+    { name: 'integration', url: `https://m.stock.naver.com/api/stock/${code}/integration` },
+    { name: 'trend', url: `https://stock.naver.com/api/domestic/detail/${code}/trend?tradeType=KRX&startIdx=0&pageSize=1` },
+  ];
+  const out = { sourceUrl: attempts[0].url, apiSources: [], price: null, name: null, shares: null, bps: null };
+  const errors = [];
+
+  for (const a of attempts) {
+    let j;
+    try { j = await fetchJson(a.url, a.name === 'trend' ? 'https://stock.naver.com/' : undefined); }
+    catch (e) { errors.push(`${a.name}: ${e.message}`); continue; }
+    out.apiSources.push(a.name);
+    if (out.price == null) out.price = findValueByKey(j, PRICE_KEY, 0);
+    if (out.name == null) out.name = findStringByKey(j, STOCK_NAME_KEY, 0);
+    if (out.shares == null) out.shares = findValueByKey(j, SHARES_KEY, 0);
+    if (out.bps == null) out.bps = findValueByKey(j, BPS_KEY, 0);
+    if (out.price != null && out.name != null && out.shares != null) break;
+  }
+
+  if (out.price == null) {
+    const e = new Error('현재가를 어떤 API에서도 읽지 못했습니다 — ' + (errors.join(' | ') || '값 없음'));
+    e.apiErrors = errors;
+    throw e;
+  }
+  out.errors = errors;
+  return out;
+}
+
 async function fromNaver(code) {
   const url = `https://finance.naver.com/item/main.naver?code=${code}`;
   const html = await fetchHtml(url);
@@ -330,13 +447,17 @@ async function getFundamentals(code) {
   if (cached) return { ...cached, cached: true };
 
   const warnings = [];
-  const [n, f] = await Promise.allSettled([fromNaver(code), fromFnGuide(code)]);
+  // 네이버는 API와 HTML 두 경로를 모두 시도한다. 2026-09 개편으로 HTML에서
+  // 현재가가 사라졌기 때문에, 현재가는 사실상 API 쪽이 담당한다.
+  const [a, n, f] = await Promise.allSettled([fromNaverApi(code), fromNaver(code), fromFnGuide(code)]);
+  const api = a.status === 'fulfilled' ? a.value : null;
   const naver = n.status === 'fulfilled' ? n.value : null;
   const fn = f.status === 'fulfilled' ? f.value : null;
-  if (!naver) warnings.push('네이버 금융을 읽지 못했습니다: ' + (n.reason?.message || '알 수 없음'));
+  if (!api) warnings.push('네이버 API를 읽지 못했습니다: ' + (a.reason?.message || '알 수 없음'));
+  if (!naver) warnings.push('네이버 종목페이지를 읽지 못했습니다: ' + (n.reason?.message || '알 수 없음'));
   if (!fn) warnings.push('FnGuide를 읽지 못했습니다: ' + (f.reason?.message || '알 수 없음'));
-  if (!naver && !fn) {
-    const e = new Error('두 사이트 모두 읽지 못했습니다.');
+  if (!api && !naver && !fn) {
+    const e = new Error('세 경로 모두 읽지 못했습니다.');
     e.warnings = warnings;
     throw e;
   }
@@ -347,10 +468,12 @@ async function getFundamentals(code) {
   while (roe.length < 3) roe.unshift(null);
   if (roe.some(v => v == null)) warnings.push('최근 3년 ROE를 다 채우지 못했습니다. 빈 칸은 직접 입력하십시오.');
 
+  const bps = (naver && naver.bps) ?? (api && api.bps) ?? null;
+  const sharesAny = (naver && naver.shares) ?? (api && api.shares) ?? null;
   let equityEok = fn ? fn.equityEok : null;
   let equityNote = 'FnGuide 지배주주지분 (최근 연간)';
-  if (equityEok == null && naver && naver.bps && naver.shares) {
-    equityEok = (naver.bps * naver.shares) / 1e8;   // 원 → 억원
+  if (equityEok == null && bps && sharesAny) {
+    equityEok = (bps * sharesAny) / 1e8;   // 원 → 억원
     equityNote = 'BPS × 상장주식수로 추정한 값 (확인 필요)';
     warnings.push('지배주주지분을 직접 읽지 못해 BPS × 상장주식수로 추정했습니다. FnGuide에서 실제 값을 확인하십시오.');
   }
@@ -358,15 +481,16 @@ async function getFundamentals(code) {
     warnings.push('지배주주지분 항목이 없어 자본총계를 사용했습니다. 비지배지분이 크면 값이 달라집니다.');
   }
 
-  const shares = (fn && fn.shares) || (naver && naver.shares) || null;
+  const shares = (fn && fn.shares) || (naver && naver.shares) || (api && api.shares) || null;
   const treasury = (fn && fn.treasury != null) ? fn.treasury : null;
   if (treasury == null) warnings.push('자사주 수를 읽지 못했습니다. 0으로 두거나 DART에서 확인해 직접 넣으십시오.');
   if (!shares) warnings.push('발행주식수를 읽지 못했습니다. 직접 입력하십시오.');
 
   const payload = {
     code,
-    name: (naver && naver.name) || (fn && fn.name) || null,
-    price: naver ? naver.price : null,
+    name: (naver && naver.name) || (api && api.name) || (fn && fn.name) || null,
+    // 현재가는 API를 우선한다 — 개편된 HTML에서는 더 이상 읽히지 않는다.
+    price: (api && api.price) ?? (naver && naver.price) ?? null,
     equityEok: equityEok != null ? Math.round(equityEok) : null,
     equityNote,
     roe,                       // [3년 전, 2년 전, 전년도] 단위 %
@@ -374,6 +498,7 @@ async function getFundamentals(code) {
     treasury: treasury ?? 0,
     warnings,
     sources: {
+      naverApi: api ? api.apiSources.join(',') : null,
       naver: naver ? naver.sourceUrl : null,
       fnguide: fn ? fn.sourceUrl : null,
     },
@@ -680,10 +805,20 @@ async function fetchMarketCapSingle(n, sosok) {
   const pages = Math.ceil(n / perPage);
   // 실패 이유를 삼키지 않는다 — 어디서 왜 막혔는지 알아야 고칠 수 있다.
   const errors = [];
-  const results = await Promise.all(
-    Array.from({ length: pages }, (_, i) =>
-      fetchMarketCapPage(i + 1, sosok, perPage).catch(e => { errors.push(`p${i + 1}: ${e.message}`); return []; }))
-  );
+  // 유니버스를 크게 잡으면 페이지가 수십 장이 된다. 한꺼번에 던지면 차단을 부르므로
+  // 5장씩 끊어서 받는다.
+  const results = [];
+  const PAGE_BATCH = 5;
+  for (let start = 0; start < pages; start += PAGE_BATCH) {
+    const batch = [];
+    for (let i = start; i < Math.min(pages, start + PAGE_BATCH); i++) {
+      batch.push(fetchMarketCapPage(i + 1, sosok, perPage)
+        .catch(e => { errors.push(`p${i + 1}: ${e.message}`); return []; }));
+    }
+    results.push(...await Promise.all(batch));
+    // 빈 페이지가 연속으로 나오면 그 시장의 끝에 도달한 것 — 더 받지 않는다.
+    if (results.slice(-PAGE_BATCH).every(r => r.length === 0)) break;
+  }
   const seen = new Set();
   const merged = [];
   for (const rows of results) {
@@ -1429,7 +1564,7 @@ app.get('/api/momentum', checkStatsAuth, async (req, res) => {
   else { wCond /= wSum; wSector /= wSum; wVolume /= wSum; wKeyword /= wSum; }
 
   const opt = {
-    universeN: Math.min(300, Math.max(10, Math.round(numParam(req.query.n, 150)))),
+    universeN: Math.min(2000, Math.max(10, Math.round(numParam(req.query.n, 150)))),
     market: req.query.market === 'KOSPI' ? 'KOSPI' : req.query.market === 'KOSDAQ' ? 'KOSDAQ' : 'ALL',
     barsAgo: numParam(req.query.barsAgo, 0) >= 1 ? 1 : 0,
     minTurnoverEok: Math.max(0, numParam(req.query.minTurnover, 30)),
@@ -1553,7 +1688,18 @@ app.get('/api/diag', async (req, res) => {
 
   const results = await Promise.all([
     ...capProbes,
-    probe('종목페이지(삼성전자)', 'https://finance.naver.com/item/main.naver?code=005930', t => /no_today/.test(t) ? '현재가 영역 있음' : '현재가 영역 없음'),
+    probe('기본정보API(삼성전자)', 'https://m.stock.naver.com/api/stock/005930/basic', t => {
+      try { const p = findValueByKey(JSON.parse(t), PRICE_KEY, 0); return p ? '현재가 ' + p : '현재가 키 없음'; }
+      catch { return 'JSON 아님'; }
+    }),
+    probe('통합API(삼성전자)', 'https://m.stock.naver.com/api/stock/005930/integration', t => {
+      try {
+        const j = JSON.parse(t);
+        return '현재가 ' + (findValueByKey(j, PRICE_KEY, 0) ?? '없음')
+          + ' / 상장주식수 ' + (findValueByKey(j, SHARES_KEY, 0) ?? '없음');
+      } catch { return 'JSON 아님'; }
+    }),
+    probe('종목페이지HTML(삼성전자)', 'https://finance.naver.com/item/main.naver?code=005930', t => /no_today/.test(t) ? '현재가 영역 있음' : '현재가 영역 없음'),
     probe('수급(삼성전자)', 'https://stock.naver.com/api/domestic/detail/005930/trend?tradeType=KRX&startIdx=0&pageSize=5', t => { try { return JSON.parse(t).length + '행'; } catch { return 'JSON 아님'; } }),
     probe('일봉 차트API(삼성전자)', 'https://api.finance.naver.com/siseJson.naver?symbol=005930&requestType=1&timeframe=day', t => ((t.match(/\["?\d{8}/g) || []).length) + '봉'),
     probe('일별시세HTML(삼성전자)', 'https://finance.naver.com/item/sise_day.naver?code=005930&page=1', t => ((t.match(/\d{4}\.\d{2}\.\d{2}/g) || []).length) + '개 날짜셀'),
@@ -1839,7 +1985,7 @@ app.get('/api/flow/:code', checkStatsAuth, async (req, res) => {
  * "고쳤는데 왜 그대로냐"의 원인이 대부분 "아직 예전 코드가 돌고 있다"였다.
  * BUILD를 올려두면 /api/health만 열어봐도 지금 무엇이 떠 있는지 바로 알 수 있다.
  */
-const BUILD = '2026-09-10 시가총액 수집 3경로 + 조건식 외부화';
+const BUILD = '2026-09-11 종목 기본정보 API 전환(네이버 개편 대응) + 유니버스 확대';
 
 app.get('/api/health', (_, res) => res.json({
   ok: true,
@@ -1850,6 +1996,8 @@ app.get('/api/health', (_, res) => res.json({
     conditionsConfigured: loadMomentumConfig().conditions.length > 0,
     conditionSource: loadMomentumConfig().source || 'none',
     universeMultiSource: true,      // 시가총액 수집 3경로
+    stockBasicViaApi: true,         // 현재가·종목명을 JSON API에서 우선 수집
+    universeMax: 2000,
     diagEndpoint: true,             // /api/diag
   },
   universeSourceInUse: LAST_UNIVERSE_SOURCE,
@@ -2069,7 +2217,7 @@ app.listen(PORT, () => console.log(`fairprice-proxy listening on ${PORT}`));
 
 module.exports = {
   app, fromNaver, fromFnGuide, toNum, rowByLabel, recordVisit, getStats, kstDate, lastNDays,
-  fetchNaverHistoryPage, fetchNaverHistory, getFundamentals, searchByNaverPage,
+  fetchNaverHistoryPage, fetchNaverHistory, getFundamentals, fromNaverApi, findValueByKey, findStringByKey, searchByNaverPage,
   fetchMarketCapPage, fetchMarketCapSingle, fetchMarketCapUniverse, fetchInvestorFlow, screenOne, runScreen, percentileRanks,
   recordRecommendation, getRecommendation, listRecommendationDates, priceAsOf, computePerformance, hasRedis,
   fetchOhlcv, fetchOhlcvChartApi, fetchOhlcvHtml, fetchSectorMap, fetchSectorList, fetchSectorMembers,

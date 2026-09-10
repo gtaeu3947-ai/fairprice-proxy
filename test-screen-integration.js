@@ -35,18 +35,18 @@ function nvHtml({ name, price, shares }) {
 
 // 마지막(최근) 거래일만 종목별로 다르게, 나머지 19일은 전부 동일한 기준값으로 둔다.
 // 이러면 flowStrength·volumeRatio가 종목마다 뚜렷하게 갈려서 동점이 안 생긴다.
-function trendJson(lastDay) {
+function trendJson(lastDay, price) {
   const rows = [];
   for (let i = 19; i >= 1; i--) {
     const d = new Date('2026-08-29T00:00:00Z'); d.setUTCDate(d.getUTCDate() - i);
     rows.push({
       itemCode: '000000', bizdate: d.toISOString().slice(0, 10).replace(/-/g, ''),
-      closePrice: '10000', tradeVolume: '100000',
+      closePrice: String(price), tradeVolume: '100000',
       organPureBuyQuant: '100', foreignerPureBuyQuant: '50', individualPureBuyQuant: '-150',
     });
   }
   rows.push({
-    itemCode: '000000', bizdate: '20260908', closePrice: '10000',
+    itemCode: '000000', bizdate: '20260908', closePrice: String(price),
     tradeVolume: String(lastDay.vol),
     organPureBuyQuant: String(lastDay.inst), foreignerPureBuyQuant: String(lastDay.foreign),
     individualPureBuyQuant: '0',
@@ -82,15 +82,24 @@ global.fetch = async (url) => {
     return html(`<html><body><table>${Object.entries(SPEC).map(([code, s]) =>
       `<tr><td><a href="/item/main.naver?code=${code}">${s.name}</a></td></tr>`).join('')}</table></body></html>`);
   }
-  const mCode = u.match(/code=A?(\d{6})/) || u.match(/\/detail\/(\d{6})\//);
+  const mCode = u.match(/code=A?(\d{6})/) || u.match(/\/detail\/(\d{6})\//) || u.match(/\/api\/stock\/(\d{6})\//);
   const code = mCode ? mCode[1] : null;
   const spec = code && SPEC[code];
   if (!spec) throw new Error('알 수 없는 코드: ' + u);
 
+  // 네이버 종목 기본정보 API (2026-09 개편 후 현재가의 1순위 출처)
+  if (u.includes('/api/stock/') && u.endsWith('/basic')) {
+    return { ok: true, status: 200, text: async () => JSON.stringify({ stockName: spec.name, closePrice: String(spec.price) }),
+      arrayBuffer: async () => Buffer.from(JSON.stringify({ stockName: spec.name, closePrice: String(spec.price) }), 'utf8') };
+  }
+  if (u.includes('/api/stock/') && u.endsWith('/integration')) {
+    const body = JSON.stringify({ stockName: spec.name, totalInfos: [{ key: '상장주식수', value: String(spec.shares) }] });
+    return { ok: true, status: 200, text: async () => body, arrayBuffer: async () => Buffer.from(body, 'utf8') };
+  }
   if (u.includes('SVD_Main.asp')) return html(fnHtml(spec));
   if (u.includes('item/main.naver')) return html(nvHtml(spec));
   if (u.includes('stock.naver.com/api/domestic/detail')) {
-    return { ok: true, status: 200, text: async () => JSON.stringify(trendJson(spec.flow)) };
+    return { ok: true, status: 200, text: async () => JSON.stringify(trendJson(spec.flow, spec.price)) };
   }
   throw new Error('예상치 못한 URL: ' + u);
 };
