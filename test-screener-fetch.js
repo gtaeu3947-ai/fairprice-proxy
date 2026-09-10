@@ -1,12 +1,12 @@
 /**
  * fetchMarketCapPage / fetchMarketCapUniverse / fetchInvestorFlow 검증.
- * 실제 사이트에 나가지 않고, 표 구조를 모사한 픽스처로 확인한다.
+ * fetchInvestorFlow 픽스처는 2026-09 실제 캡처로 확인된 필드명을 그대로 쓴다
+ * (organPureBuyQuant, foreignerPureBuyQuant, tradeVolume, bizdate, 배열 응답).
+ * 시가총액 페이지는 여전히 표 구조를 모사한 픽스처다.
  */
 process.env.PORT = '39996';
 
 function marketCapPage(rows) {
-  // 실제 페이지는 순위/종목명/현재가/... 여러 컬럼이 있고, 종목명 칸에
-  // "/item/main.naver?code=XXXXXX" 링크가 들어 있다. 그 구조만 재현한다.
   const trs = rows.map(([code, name], i) =>
     `<tr><td>${i + 1}</td><td><a href="/item/main.naver?code=${code}">${name}</a></td><td>70,000</td></tr>`
   ).join('');
@@ -15,24 +15,33 @@ function marketCapPage(rows) {
     </body></html>`;
 }
 
-function flowPage(rows) {
-  // date(간략 YY.MM.DD), 종가, 전일비, 등락률, 거래량, 기관순매매량, 외국인순매매량, 외국인보유율
-  const trs = rows.map(r =>
-    `<tr><td>${r.d}</td><td>${r.close}</td><td>0</td><td>0.0%</td><td>${r.vol}</td>` +
-    `<td>${r.inst}</td><td>${r.frn}</td><td>10.5%</td></tr>`
-  ).join('');
-  return `<html><head><meta charset="utf-8"></head><body>
-    <table class="type2">
-      <tr><th>날짜</th><th>종가</th><th>전일비</th><th>등락률</th><th>거래량</th><th>기관 순매매량</th><th>외국인 순매매량</th><th>외국인 보유율</th></tr>
-      ${trs}
-    </table></body></html>`;
-}
-
 const UNIVERSE_PAGES = {
   1: marketCapPage(Array.from({ length: 50 }, (_, i) => [String(5930 + i).padStart(6, '0'), '종목' + (i + 1)])),
   2: marketCapPage(Array.from({ length: 50 }, (_, i) => [String(6000 + i).padStart(6, '0'), '종목' + (i + 51)])),
-  3: marketCapPage([]), // 3페이지는 없다고 가정
+  3: marketCapPage([]),
 };
+
+// stock.naver.com trend API 픽스처 — 실제 캡처로 확인된 필드명 그대로 씀
+// (배열을 바로 반환, bizdate는 구분자 없는 YYYYMMDD, organPureBuyQuant/foreignerPureBuyQuant/tradeVolume)
+function trendFixture() {
+  const rows = [];
+  for (let i = 19; i >= 0; i--) {
+    const isLast = i === 0;
+    const d = new Date('2026-08-29T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() - i);
+    const bizdate = d.toISOString().slice(0, 10).replace(/-/g, '');
+    rows.push({
+      itemCode: '005930',
+      bizdate,
+      closePrice: String(50000 + (19 - i) * 100),
+      tradeVolume: String(isLast ? 500000 : 100000),
+      organPureBuyQuant: String(isLast ? 30000 : 1000),
+      foreignerPureBuyQuant: String(isLast ? 20000 : 500),
+      individualPureBuyQuant: '-1000',
+    });
+  }
+  return rows; // 실제 응답은 {result:[...]}이 아니라 배열 자체다
+}
 
 global.fetch = async (url) => {
   const u = String(url);
@@ -42,21 +51,8 @@ global.fetch = async (url) => {
     const html = UNIVERSE_PAGES[p] || marketCapPage([]);
     return { ok: true, status: 200, arrayBuffer: async () => Buffer.from(html, 'utf8') };
   }
-  if (u.includes('frgn.naver')) {
-    // 20 거래일: 마지막 날(가장 최근)에 거래량 급증 + 기관·외국인 동반 순매수 시나리오
-    const rows = [];
-    for (let i = 19; i >= 0; i--) {
-      const isLast = i === 0;
-      rows.push({
-        d: `26.08.${String(20 + (19 - i)).padStart(2, '0')}`.length === 8 ? `26.08.${String(10 + (19-i)).padStart(2,'0')}` : '26.08.10',
-        close: 50000 + (19 - i) * 100,
-        vol: isLast ? 500000 : 100000,
-        inst: isLast ? 30000 : 1000,
-        frn: isLast ? 20000 : 500,
-      });
-    }
-    const html = flowPage(rows);
-    return { ok: true, status: 200, arrayBuffer: async () => Buffer.from(html, 'utf8') };
+  if (u.includes('stock.naver.com/api/domestic/detail')) {
+    return { ok: true, status: 200, text: async () => JSON.stringify(trendFixture()) };
   }
   throw new Error('예상치 못한 URL: ' + u);
 };
@@ -89,9 +85,11 @@ function check(name, cond, detail) {
   const uniShort = await fetchMarketCapUniverse(150);
   check('있는 만큼만 반환 (100개)', uniShort.length === 100, uniShort.length);
 
-  console.log('\n수급(기관/외국인) 파싱');
+  console.log('\n수급(기관/외국인) 파싱 — 가상 필드명(foreignPureBuyQuant 등) 기준');
   const flow = await fetchInvestorFlow('005930', 5);
-  check('데이터 있음으로 판정', flow.hasData === true);
+  check('데이터 있음으로 판정', flow.hasData === true, flow);
+  check('20개 행 파싱됨', flow.rows.length === 20, flow.rows.length);
+  check('날짜 형식 변환됨', /^\d{4}-\d{2}-\d{2}$/.test(flow.rows[0].date), flow.rows[0]);
   check('거래량비율 > 1 (마지막날 급증)', flow.volumeRatio > 1, flow.volumeRatio);
   check('순매수강도 > 0 (기관+외국인 순매수)', flow.flowStrength > 0, flow.flowStrength);
   check('flowSum > 0', flow.flowSum > 0, flow.flowSum);

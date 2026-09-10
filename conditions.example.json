@@ -1,0 +1,57 @@
+{
+  "_주의": "이건 형식만 보여주는 예시입니다. 실제로 쓰는 조건식은 여기에 적지 마십시오 — 이 파일은 저장소에 올라갑니다. 실제 조건은 Render 환경변수 MOMENTUM_CONDITIONS에 넣거나, 이 파일을 conditions.local.json으로 복사해서 고치십시오(.gitignore 등록됨).",
+
+  "label": "예시 조건식",
+  "conditions": [
+    {
+      "key": "A",
+      "desc": "RSI(14)가 50선을 위로 뚫음",
+      "indicator": "rsi",
+      "params": { "n": 14 },
+      "type": "crossUp",
+      "level": 50
+    },
+    {
+      "key": "B",
+      "desc": "종가가 20일 이동평균 위",
+      "indicator": "ma",
+      "params": { "n": 20 },
+      "type": "below",
+      "level": 999999999
+    },
+    {
+      "key": "C",
+      "desc": "거래량이 20일 평균의 1.5배 이상",
+      "indicator": "volumeRatio",
+      "params": { "n": 20 },
+      "type": "above",
+      "level": 1.5
+    }
+  ],
+
+  "_지표": [
+    "cci        params: {n}            — CCI",
+    "macdOsc    params: {fast,slow,signal} — MACD 오실레이터 (MACD − 시그널)",
+    "macdLine   params: {fast,slow,signal}",
+    "macdSignal params: {fast,slow,signal}",
+    "obv        params: {}             — OBV 원값",
+    "obvRatio   params: {n}            — OBV ÷ OBV n일 이동평균 × 100 (이동평균=100)",
+    "wr         params: {n}            — Williams %R (−100 ~ 0)",
+    "rsi        params: {n}",
+    "ma         params: {n}            — 종가 단순이동평균",
+    "close      params: {}",
+    "volume     params: {}",
+    "volumeRatio params: {n}           — 당일 거래량 ÷ 직전 n일 평균"
+  ],
+
+  "_판정": [
+    "crossUp   : 전봉 ≤ level 이고 당봉 > level  (상향돌파)",
+    "crossDown : 전봉 ≥ level 이고 당봉 < level  (하향돌파)",
+    "above     : 당봉 ≥ level",
+    "below     : 당봉 ≤ level",
+    "rising    : bars봉 연속 상승 (bars 기본 1, level 불필요)",
+    "falling   : bars봉 연속 하락"
+  ],
+
+  "_비고": "나열한 조건은 전부 AND로 묶입니다. 전부 만족하면 '조건식 충족'으로 표시됩니다."
+}

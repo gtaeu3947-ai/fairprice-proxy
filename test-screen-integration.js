@@ -1,11 +1,16 @@
 /**
- * screenOne / runScreen 통합 검증.
- * 6개의 가상 종목(펀더멘털을 직접 설계)으로 유니버스를 구성해,
- * 저평가 필터·수급 필터·정렬·top3 슬라이싱이 의도대로 동작하는지 확인한다.
+ * screenOne / runScreen 통합 검증 — 복합 스코어링(랭킹 기반) 버전.
+ *
+ * 예전 AND-게이트 방식(저평가·수급·거래량 세 조건을 전부 동시에 넘겨야 함)은
+ * 실제로 "결과가 너무 안 나온다"는 문제가 있었다. 지금은 세 지표를 백분위로 바꿔
+ * 가중합한 점수로 순위를 매기고, 절대 임계값은 선택적 사전 필터로만 쓴다.
+ *
+ * 이 테스트는 동점(tie)이 안 생기도록 종목마다 저평가폭·수급강도·거래량비율을
+ * 전부 다르게 설계했다 — A가 세 지표 전부에서 확실히 1등이 되게 해서, 가중치가
+ * 뭐든 A가 반드시 1순위가 되는지까지 확인한다.
  *
  * 실제 사이트 구조가 아니라 이 테스트에서 설계한 픽스처를 쓰므로,
  * 여기서 검증하는 것은 "회로가 맞게 연결됐는가"이지 "실제 사이트를 정확히 파싱하는가"가 아니다.
- * 파싱 자체는 test-parser.js / test-screener-fetch.js에서 별도로 검증했다.
  */
 process.env.PORT = '39995';
 
@@ -27,43 +32,43 @@ function nvHtml({ name, price, shares }) {
   <table id="tab_con1"><tr><th>상장주식수</th><td>${shares.toLocaleString('en-US')}</td></tr></table>
   </body></html>`;
 }
-function flowHtml(strong) {
+
+// 마지막(최근) 거래일만 종목별로 다르게, 나머지 19일은 전부 동일한 기준값으로 둔다.
+// 이러면 flowStrength·volumeRatio가 종목마다 뚜렷하게 갈려서 동점이 안 생긴다.
+function trendJson(lastDay) {
   const rows = [];
-  for (let i = 19; i >= 0; i--) {
-    const isLast = i === 0;
+  for (let i = 19; i >= 1; i--) {
+    const d = new Date('2026-08-29T00:00:00Z'); d.setUTCDate(d.getUTCDate() - i);
     rows.push({
-      d: `26.08.${String(10 + (19 - i)).padStart(2, '0')}`,
-      close: 10000,
-      vol: (isLast && strong) ? 500000 : 100000,
-      inst: (isLast && strong) ? 30000 : (strong ? 1000 : -500),
-      frn: (isLast && strong) ? 20000 : (strong ? 500 : -200),
+      itemCode: '000000', bizdate: d.toISOString().slice(0, 10).replace(/-/g, ''),
+      closePrice: '10000', tradeVolume: '100000',
+      organPureBuyQuant: '100', foreignerPureBuyQuant: '50', individualPureBuyQuant: '-150',
     });
   }
-  const trs = rows.map(r =>
-    `<tr><td>${r.d}</td><td>${r.close}</td><td>0</td><td>0.0%</td><td>${r.vol}</td><td>${r.inst}</td><td>${r.frn}</td><td>10%</td></tr>`
-  ).join('');
-  return `<html><head><meta charset="utf-8"></head><body>
-    <table class="type2">
-      <tr><th>날짜</th><th>종가</th><th>전일비</th><th>등락률</th><th>거래량</th><th>기관 순매매량</th><th>외국인 순매매량</th><th>외국인 보유율</th></tr>
-      ${trs}
-    </table></body></html>`;
-}
-function marketCapPage(entries) {
-  const trs = entries.map(([code, name], i) =>
-    `<tr><td>${i + 1}</td><td><a href="/item/main.naver?code=${code}">${name}</a></td><td>1</td></tr>`
-  ).join('');
-  return `<html><body><table>${trs}</table></body></html>`;
+  rows.push({
+    itemCode: '000000', bizdate: '20260908', closePrice: '10000',
+    tradeVolume: String(lastDay.vol),
+    organPureBuyQuant: String(lastDay.inst), foreignerPureBuyQuant: String(lastDay.foreign),
+    individualPureBuyQuant: '0',
+  });
+  return rows;
 }
 
 // 공통 스펙: 자기자본 10,000억, 발행주식 1억주, 자사주 0 → sharesOut=1억
-// k(요구수익률)=4.64%(AA, 기본값), w=0.8(횡보) 일 때 fairPrice ≈ 13,364원 (별도 계산, test-fairvalue.js와 동일 공식)
+// k=4.64%(AA), w=1.0(상승장) 일 때 fairPrice ≈ ? — 아래서 직접 계산해 fair 변수로 씀.
 const SPEC = {
-  '100001': { name: 'A_딥밸류_수급강함', equityEok: 10000, roe: 15, shares: 100000000, treasury: 0, price: 8000, strongFlow: true },   // gap ≈ -40%, 통과 1순위
-  '100002': { name: 'B_딥밸류_수급약함', equityEok: 10000, roe: 15, shares: 100000000, treasury: 0, price: 8000, strongFlow: false },  // gap ≈ -40%, 수급 미달로 탈락
-  '100003': { name: 'C_고평가_수급강함', equityEok: 10000, roe: 15, shares: 100000000, treasury: 0, price: 16000, strongFlow: true },  // gap ≈ +20%, 저평가 아님 → 탈락
-  '100004': { name: 'D_경계선저평가_수급강함', equityEok: 10000, roe: 15, shares: 100000000, treasury: 0, price: 10000, strongFlow: true }, // gap ≈ -25%, 통과 3순위
-  '100005': { name: 'E_ROE낮음', equityEok: 10000, roe: 2, shares: 100000000, treasury: 0, price: 5000, strongFlow: true },           // ROE<k → 스킵
-  '100006': { name: 'G_중간저평가_수급강함', equityEok: 10000, roe: 15, shares: 100000000, treasury: 0, price: 9300, strongFlow: true },   // gap ≈ -30%, 통과 2순위
+  '100001': { name: 'A_전지표1등', equityEok: 10000, roe: 15, shares: 100000000, treasury: 0,
+    price: 7000, flow: { inst: 50000, foreign: 30000, vol: 800000 } },
+  '100002': { name: 'B_수급최악', equityEok: 10000, roe: 15, shares: 100000000, treasury: 0,
+    price: 7500, flow: { inst: -20000, foreign: -10000, vol: 50000 } },
+  '100003': { name: 'C_고평가', equityEok: 10000, roe: 15, shares: 100000000, treasury: 0,
+    price: 16000, flow: { inst: 50000, foreign: 30000, vol: 800000 } },
+  '100004': { name: 'D_저평가폭_얕음', equityEok: 10000, roe: 15, shares: 100000000, treasury: 0,
+    price: 10500, flow: { inst: 5000, foreign: 2000, vol: 150000 } },
+  '100005': { name: 'E_ROE낮음', equityEok: 10000, roe: 2, shares: 100000000, treasury: 0,
+    price: 5000, flow: { inst: 50000, foreign: 30000, vol: 800000 } },
+  '100006': { name: 'G_중간', equityEok: 10000, roe: 15, shares: 100000000, treasury: 0,
+    price: 9000, flow: { inst: 20000, foreign: 10000, vol: 300000 } },
 };
 
 global.fetch = async (url) => {
@@ -73,57 +78,79 @@ global.fetch = async (url) => {
   if (u.includes('sise_market_sum')) {
     const m = u.match(/page=(\d+)/);
     const page = m ? Number(m[1]) : 1;
-    if (page > 1) return html(marketCapPage([]));
-    return html(marketCapPage(Object.entries(SPEC).map(([code, s]) => [code, s.name])));
+    if (page > 1) return html('<html><body></body></html>');
+    return html(`<html><body><table>${Object.entries(SPEC).map(([code, s]) =>
+      `<tr><td><a href="/item/main.naver?code=${code}">${s.name}</a></td></tr>`).join('')}</table></body></html>`);
   }
-  const mCode = u.match(/code=A?(\d{6})/);
+  const mCode = u.match(/code=A?(\d{6})/) || u.match(/\/detail\/(\d{6})\//);
   const code = mCode ? mCode[1] : null;
   const spec = code && SPEC[code];
   if (!spec) throw new Error('알 수 없는 코드: ' + u);
 
   if (u.includes('SVD_Main.asp')) return html(fnHtml(spec));
   if (u.includes('item/main.naver')) return html(nvHtml(spec));
-  if (u.includes('frgn.naver')) return html(flowHtml(spec.strongFlow));
+  if (u.includes('stock.naver.com/api/domestic/detail')) {
+    return { ok: true, status: 200, text: async () => JSON.stringify(trendJson(spec.flow)) };
+  }
   throw new Error('예상치 못한 URL: ' + u);
 };
 
-const { runScreen } = require('./server.js');
+const { runScreen, fairValue } = require('./server.js');
 
 let fail = 0;
 function check(name, cond, detail) {
   if (!cond) { fail++; console.log('  FAIL  ' + name + '  ' + JSON.stringify(detail)); }
   else console.log('  OK    ' + name);
 }
+function near(a, b, eps) { return Math.abs(a - b) <= (eps || 0.02); }
 
 (async () => {
-  const opt = {
+  // ── 시나리오 1: 절대 임계값 전부 끔(기본값) → 랭킹 모드 ──────────────
+  const opt1 = {
     universeN: 6, regime: 'flat', kbasePct: 4.64,
-    minGapPct: 20, minFlowStrength: 0.05, minVolumeRatio: 1.3, flowDays: 5,
+    minGapPct: 0, minFlowStrength: -1, minVolumeRatio: 0, flowDays: 5,
+    weightGap: 0.5, weightFlow: 0.3, weightVolume: 0.2,
   };
-  const result = await runScreen(opt);
+  const r1 = await runScreen(opt1);
+  console.log('시나리오1(필터 꺼짐) funnel:', JSON.stringify(r1.funnel));
+  console.log('시나리오1 candidates:', JSON.stringify(r1.candidates.map(c => ({ code: c.code, score: c.score, gapPct: c.gapPct }))));
+  console.log('시나리오1 runnerUps:', JSON.stringify(r1.runnerUps.map(c => c.code)));
 
-  console.log('스캔 결과 개요:', JSON.stringify({
-    universeSize: result.universeSize, consideredCount: result.consideredCount,
-    skippedCount: result.skippedCount, passedCount: result.passedCount,
-  }));
+  check('유니버스 6개 수집', r1.universeSize === 6);
+  check('ROE낮은 E는 스킵됨(consideredCount=5)', r1.consideredCount === 5, r1.consideredCount);
+  check('고평가 C 제외하고 4개가 저평가로 잡힘', r1.funnel.undervalued === 4, r1.funnel);
+  check('필터 꺼졌으니 저평가 4개 전부 pool에 들어감', r1.passedCount === 4, r1.passedCount);
+  check('top3 = 3개, runnerUp = 1개', r1.candidates.length === 3 && r1.runnerUps.length === 1,
+    { c: r1.candidates.length, r: r1.runnerUps.length });
 
-  check('유니버스 6개 전부 수집', result.universeSize === 6, result.universeSize);
-  check('ROE 낮은 종목 1개 스킵됨', result.skippedCount === 1, result.skippedCount);
-  check('필터 통과 3개 (A, G, D)', result.passedCount === 3, result.passedCount);
-  check('top3에 정확히 3개', result.candidates.length === 3, result.candidates.length);
-  check('runnerUps는 빔 (통과 3개뿐이라)', result.runnerUps.length === 0, result.runnerUps.length);
+  const codes1 = r1.candidates.map(c => c.code);
+  check('1순위 = A (세 지표 전부 1등)', codes1[0] === '100001', codes1);
+  check('2순위 = G', codes1[1] === '100006', codes1);
+  check('3순위 = B (저평가폭은 있지만 수급·거래량 최악이라도 top3엔 듦)', codes1[2] === '100002', codes1);
+  check('4위(runnerUp) = D (저평가폭이 제일 얕아서 밀림)', r1.runnerUps[0].code === '100004', r1.runnerUps);
 
-  const codes = result.candidates.map(c => c.code);
-  check('1순위 = A(가장 저평가)', codes[0] === '100001', codes);
-  check('2순위 = G', codes[1] === '100006', codes);
-  check('3순위 = D(경계선)', codes[2] === '100004', codes);
+  check('A 점수 ≈ 1.0 (모든 지표 최고)', near(r1.candidates[0].score, 1.0, 0.02), r1.candidates[0].score);
+  check('marginPct 계산됨 (roeW 15% − k 4.64% ≈ 10.36%p)', near(r1.candidates[0].marginPct, 10.36, 0.05), r1.candidates[0].marginPct);
+  check('여유폭 충분하니 thinMargin=false', r1.candidates.every(c => c.thinMargin === false), r1.candidates.map(c => c.thinMargin));
+  check('점수는 내림차순 정렬됨', r1.candidates[0].score >= r1.candidates[1].score
+    && r1.candidates[1].score >= r1.candidates[2].score, r1.candidates.map(c => c.score));
+  check('C(고평가)는 candidates/runnerUps 어디에도 없음',
+    !codes1.includes('100003') && !r1.runnerUps.some(x => x.code === '100003'));
+  check('E(ROE낮음)도 어디에도 없음',
+    !codes1.includes('100005') && !r1.runnerUps.some(x => x.code === '100005'));
 
-  check('B(수급약함)는 후보에 없음', !codes.includes('100002'));
-  check('C(고평가)는 후보에 없음', !codes.includes('100003'));
-  check('E(ROE낮음)는 후보에 없음', !codes.includes('100005'));
+  // ── 시나리오 2: 절대 임계값을 켜서(선택적 사전 필터) 예전처럼 좁히기 ──
+  const opt2 = {
+    universeN: 6, regime: 'flat', kbasePct: 4.64,
+    minGapPct: 20, minFlowStrength: 0.03, minVolumeRatio: 1.05, flowDays: 5,
+    weightGap: 0.5, weightFlow: 0.3, weightVolume: 0.2,
+  };
+  const r2 = await runScreen(opt2);
+  console.log('\n시나리오2(필터 켜짐) funnel:', JSON.stringify(r2.funnel));
+  const codes2 = r2.candidates.map(c => c.code).sort();
 
-  check('1순위 gapPct가 가장 음수', result.candidates[0].gapPct < result.candidates[1].gapPct, result.candidates.map(c=>c.gapPct));
-  check('적정주가가 약 13,364원대', Math.abs(result.candidates[0].fairPrice - 13364) < 5, result.candidates[0].fairPrice);
+  check('필터 켜면 A, G만 통과 (B·D는 수급강도 3% 미달)', JSON.stringify(codes2) === JSON.stringify(['100001', '100006']), codes2);
+  check('runnerUps는 빔', r2.runnerUps.length === 0, r2.runnerUps.length);
 
   console.log('\n' + (fail ? fail + '건 실패' : '전부 통과'));
   process.exit(fail ? 1 : 0);
