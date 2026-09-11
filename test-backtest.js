@@ -264,5 +264,71 @@ console.log('\n[17] 진입률이 집계에 나온다');
   check('평균 진입 지연이 계산됨', agg.overall.avgEntryDelayBars === 1.5, agg.overall);
 }
 
+
+console.log('\n[18] 분할매수 — 평단이 낮아진다');
+{
+  // 진입 100 → 다음날 저가 86까지 밀림(-14%) → 이후 회복
+  const closes = [100, 100, 95, 100, 103, 106, 110, 110, 110, 110, 110, 110, 110, 110, 110, 110, 110, 110, 110, 110];
+  const bars = mkBars(closes, {
+    open: (i) => (i === 6 ? 100 : closes[i]),
+    high: (i) => closes[i] * 1.005,
+    low: (i) => (i === 6 ? 86 : closes[i] * 0.995),
+  });
+  const opt = { holdDays: 10, targetPct: 6, stopPct: 20, minPassCount: 1, warmupBars: 4,
+                addOnDropPct: 14, firstWeight: 0.5 };
+  const t = BT.simulateOne(bars, ALWAYS, opt).find(x => x.entryDate === bars[6].date);
+  check('추가매수가 일어남', t && t.addedAt != null, t);
+  check('평단이 진입가와 추가매수가의 중간(93)', t && Math.abs(t.avgPrice - 93) < 0.01, t);
+  check('투입 비중이 1로 찬다', t && t.investedWeight === 1, t);
+}
+
+console.log('\n[19] 추가매수가 없으면 절반만 투입된 것으로 계산');
+{
+  // 한 번도 -14%를 안 찍고 바로 목표 도달
+  const bars = mkBars(Array(20).fill(100), {
+    open: () => 100, high: (i) => (i === 6 ? 107 : 100.5), low: () => 99.5,
+  });
+  const opt = { holdDays: 10, targetPct: 6, stopPct: 20, minPassCount: 1, warmupBars: 4,
+                addOnDropPct: 14, firstWeight: 0.5 };
+  const t = BT.simulateOne(bars, ALWAYS, opt).find(x => x.entryDate === bars[5].date);
+  check('추가매수 안 함', t && t.addedAt == null, t);
+  check('가격 수익률은 6%', t && Math.abs(t.priceReturnPct - 6) < 0.01, t);
+  check('자금 기준 수익률은 절반인 3%', t && Math.abs(t.returnPct - 3) < 0.01, t);
+  check('투입 비중 0.5', t && t.investedWeight === 0.5, t);
+}
+
+console.log('\n[20] 추가매수는 손절보다 먼저 판정된다');
+{
+  // -14%에서 추가매수, 손절은 새 평단(93) 기준 -20% = 74.4 → 안 걸림
+  const closes = Array(20).fill(100);
+  const bars = mkBars(closes, {
+    open: () => 100, high: () => 100.5,
+    low: (i) => (i === 6 ? 86 : 99.5),
+  });
+  const opt = { holdDays: 10, targetPct: 6, stopPct: 20, minPassCount: 1, warmupBars: 4,
+                addOnDropPct: 14, firstWeight: 0.5 };
+  const t = BT.simulateOne(bars, ALWAYS, opt).find(x => x.entryDate === bars[5].date);
+  check('손절로 끝나지 않음', t && t.exitReason !== 'stop', t);
+  check('추가매수 기록됨', t && t.addedAt != null, t);
+}
+
+console.log('\n[21] 물타기 뒤에도 못 살아난 거래를 따로 센다');
+{
+  const trades = [
+    { returnPct: 3, buyHoldPct: 3, exitReason: 'target', exitBars: 2, mfePct: 7, maePct: -2, passCount: 3, addedAt: null, investedWeight: 0.5, addedButLost: false },
+    { returnPct: -18, buyHoldPct: -18, exitReason: 'stop', exitBars: 5, mfePct: 1, maePct: -20, passCount: 3, addedAt: 2, investedWeight: 1, addedButLost: true },
+    { returnPct: 6, buyHoldPct: 6, exitReason: 'target', exitBars: 4, mfePct: 8, maePct: -15, passCount: 3, addedAt: 1, investedWeight: 1, addedButLost: false },
+    { returnPct: 3, buyHoldPct: 3, exitReason: 'target', exitBars: 1, mfePct: 6, maePct: -1, passCount: 3, addedAt: null, investedWeight: 0.5, addedButLost: false },
+  ];
+  const sum = BT.summarize(trades, [1, 1, 1, 1]);
+  check('추가매수 비율 50%', sum.addedRatePct === 50, sum.addedRatePct);
+  check('추가매수 뒤 손실 비율 50%', sum.addedLostRatePct === 50, sum.addedLostRatePct);
+  check('추가매수한 거래 평균이 따로 나온다', Math.abs(sum.addedAvgReturnPct - (-6)) < 0.01, sum.addedAvgReturnPct);
+  check('안 한 거래 평균도 따로', Math.abs(sum.noAddAvgReturnPct - 3) < 0.01, sum.noAddAvgReturnPct);
+  check('-10% 넘게 잃은 비율 25%', sum.lossOver10Pct === 25, sum.lossOver10Pct);
+  check('하위 10% 값이 최악 쪽을 가리킨다', sum.p10ReturnPct === -18, sum.p10ReturnPct);
+  check('평균 투입 비중 0.75', sum.avgInvestedWeight === 0.75, sum.avgInvestedWeight);
+}
+
 console.log('\n' + (fail ? fail + '개 실패' : '전부 통과'));
 process.exit(fail ? 1 : 0);

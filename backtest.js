@@ -28,6 +28,14 @@ function median(arr) {
   return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
 }
 
+/** 하위 p% 값. 최악 쪽 꼬리를 보려는 것. */
+function percentile(arr, p) {
+  if (!arr.length) return null;
+  const a = arr.slice().sort((x, y) => x - y);
+  const idx = Math.min(a.length - 1, Math.max(0, Math.floor((p / 100) * a.length)));
+  return a[idx];
+}
+
 function mean(arr) {
   if (!arr.length) return null;
   return arr.reduce((s, v) => s + v, 0) / arr.length;
@@ -86,17 +94,48 @@ function simulateOne(bars, config, opt) {
     }
     if (!(entry > 0)) continue;
 
-    const target = entry * (1 + opt.targetPct / 100);
-    const stop = entry * (1 - opt.stopPct / 100);
+    /* ── 분할매수(물타기)
+     *
+     * 1차로 weight1만큼 사고, 진입가 대비 addDropPct만큼 더 빠지면 나머지를 더 산다.
+     * 목표와 손절은 그때마다 "새 평단" 기준으로 다시 잡는다.
+     *
+     * 주의해서 볼 것: 이 방식은 백테스트에서 거의 항상 좋게 나온다. 손실을 확정하지
+     * 않고 미루면 상승장에서는 대부분 회복되기 때문이다. 진짜 위험은 회복하지 못한
+     * 소수 거래에 몰려 있으므로, 아래에서 최악의 거래와 "추가매수했는데 끝내 못 살아난"
+     * 비율을 따로 기록한다. 평균만 보면 반드시 잘못 판단하게 된다.
+     *
+     * 수익률은 실제로 투입한 자금 기준이다. 2차까지 들어가면 자금이 두 배 들어가므로,
+     * 1차만 들어간 거래와 같은 잣대로 비교하려면 가중평균이어야 한다.
+     */
+    const addOn = opt.addOnDropPct > 0;
+    const w1 = addOn ? Math.min(0.95, Math.max(0.05, opt.firstWeight ?? 0.5)) : 1;
+    const w2 = 1 - w1;
+    const addPrice = addOn ? entry * (1 - opt.addOnDropPct / 100) : null;
+
+    let avg = entry;          // 평단
+    let invested = w1;        // 투입 비중 (1차만이면 w1, 추가매수 후 1)
+    let addedAt = null;       // 추가매수한 봉 번호
+    let target = avg * (1 + opt.targetPct / 100);
+    let stop = avg * (1 - opt.stopPct / 100);
 
     let exit = null, exitReason = null, exitBars = null;
-    let mfe = 0, mae = 0;   // 보유 중 최대 상승폭 / 최대 하락폭 (%)
+    let mfe = 0, mae = 0;   // 1차 진입가 대비 최대 상승·하락폭 (%)
 
     for (let k = 0; k < hold; k++) {
       const b = bars[i + entryOffset + k];
       if (!b) break;
       mfe = Math.max(mfe, (b.high / entry - 1) * 100);
       mae = Math.min(mae, (b.low / entry - 1) * 100);
+
+      // 추가매수가 손절보다 먼저다. 손절선을 추가매수가보다 아래에 두는 게 전제.
+      if (addOn && addedAt == null && b.low <= addPrice) {
+        const fill = Math.min(addPrice, b.open);
+        avg = (entry * w1 + fill * w2) / (w1 + w2);
+        invested = 1;
+        addedAt = k + 1;
+        target = avg * (1 + opt.targetPct / 100);
+        stop = avg * (1 - opt.stopPct / 100);
+      }
 
       const hitStop = b.low <= stop;
       const hitTarget = b.high >= target;
@@ -106,13 +145,23 @@ function simulateOne(bars, config, opt) {
     }
     if (exit == null) continue;
 
+    // 투입 자금 기준 수익률. 1차만 들어간 거래는 절반만 넣었으므로 그만큼만 반영된다.
+    const priceReturn = (exit / avg - 1) * 100;
+    const capitalReturn = priceReturn * invested;
+    const endBar = bars[i + entryOffset + hold - 1] || bars[bars.length - 1];
+
     trades.push({
       date: bars[i].date,
       entryDate: entryBar.date,
       entry: r2(entry),
+      avgPrice: r2(avg),
       exit: r2(exit),
-      returnPct: r2((exit / entry - 1) * 100),
-      buyHoldPct: r2(((bars[i + entryOffset + hold - 1] || bars[bars.length - 1]).close / entry - 1) * 100),
+      returnPct: r2(capitalReturn),
+      priceReturnPct: r2(priceReturn),
+      investedWeight: r2(invested),
+      addedAt,                                  // null이면 추가매수 안 함
+      addedButLost: addedAt != null && capitalReturn < 0,
+      buyHoldPct: r2((endBar.close / entry - 1) * 100),
       entryOffset,
       exitReason, exitBars,
       mfePct: r2(mfe), maePct: r2(mae),
@@ -172,6 +221,24 @@ function summarize(trades, benchmark) {
     avgMaePct: r2(mean(trades.map(t => t.maePct))),
     worstTradePct: r2(Math.min(...rets)),
     bestTradePct: r2(Math.max(...rets)),
+    // 평균만 보면 물타기를 과대평가하게 된다. 꼬리 쪽을 따로 본다.
+    p10ReturnPct: r2(percentile(rets, 10)),
+    lossOver10Pct: r2((rets.filter(v => v <= -10).length / trades.length) * 100),
+    // 추가매수 통계
+    addedRatePct: r2((trades.filter(t => t.addedAt != null).length / trades.length) * 100),
+    addedLostRatePct: (() => {
+      const added = trades.filter(t => t.addedAt != null);
+      return added.length ? r2((added.filter(t => t.addedButLost).length / added.length) * 100) : null;
+    })(),
+    addedAvgReturnPct: (() => {
+      const added = trades.filter(t => t.addedAt != null);
+      return added.length ? r2(mean(added.map(t => t.returnPct))) : null;
+    })(),
+    noAddAvgReturnPct: (() => {
+      const plain = trades.filter(t => t.addedAt == null);
+      return plain.length ? r2(mean(plain.map(t => t.returnPct))) : null;
+    })(),
+    avgInvestedWeight: r2(mean(trades.map(t => t.investedWeight ?? 1))),
     // 아무 날이나 진입했을 때와의 차이 — 이게 양수여야 신호에 의미가 있다
     benchmarkAvgPct: r2(benchAvg),
     edgeVsBenchmarkPct: (benchAvg == null) ? null : r2(mean(bh) - benchAvg),
@@ -250,4 +317,4 @@ function aggregate(perStock, opt) {
   };
 }
 
-module.exports = { simulateOne, benchmarkReturns, summarize, splitByDate, aggregate, median, mean };
+module.exports = { simulateOne, benchmarkReturns, summarize, splitByDate, aggregate, median, mean, percentile };
