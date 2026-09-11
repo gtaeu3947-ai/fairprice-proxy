@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>조건식 백테스트</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<style>
+  :root{
+    --ink:#16202C; --ink-2:#4A5966; --ink-3:#7B8896;
+    --paper:#EDF0F4; --panel:#FFFFFF; --line:#D6DDE5; --line-2:#E9EEF3;
+    --gain:#12704C; --loss:#B4451C; --accent:#1F5FBF; --amber:#A97614; --r:10px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{background:var(--paper);color:var(--ink);
+    font-family:"Pretendard Variable",Pretendard,-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+    font-size:15px;line-height:1.55;font-feature-settings:"tnum" 1;-webkit-text-size-adjust:100%}
+  .wrap{max-width:1060px;margin:0 auto;padding:16px 16px 72px}
+  h1,h2,h3{margin:0;font-weight:700;letter-spacing:-0.02em}
+  nav{font-size:13px;display:flex;gap:14px;flex-wrap:wrap}
+  nav a{color:var(--ink-2);text-decoration:none}
+  nav a:hover{text-decoration:underline}
+  header{padding:8px 0 20px;border-bottom:2px solid var(--ink)}
+  h1{font-size:24px;line-height:1.2;margin-top:8px}
+  .sub{color:var(--ink-2);font-size:13.5px;margin-top:6px}
+  .warnbox{margin-top:14px;padding:12px 14px;background:#FDF1EC;border:1px solid #F0C9B8;
+    border-radius:var(--r);color:#7A2E10;font-size:13.5px}
+  .warnbox b{display:block;margin-bottom:4px}
+  section{margin-top:24px}
+  .stitle{display:flex;align-items:baseline;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+  .stitle h2{font-size:17px}
+  .stitle span{font-size:13px;color:var(--ink-3)}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+  .grid{display:grid;gap:12px 14px;grid-template-columns:repeat(4,1fr)}
+  .f{display:flex;flex-direction:column;gap:5px;min-width:0}
+  .f label{font-size:12.5px;color:var(--ink-2);font-weight:600}
+  .f .hint{font-weight:400;color:var(--ink-3);font-size:11.5px}
+  input,select{font:inherit;font-size:15px;color:var(--ink);background:#FBFCFD;
+    border:1px solid var(--line);border-radius:7px;padding:9px 10px;width:100%}
+  button.act{font:inherit;font-weight:700;font-size:15px;cursor:pointer;background:var(--ink);color:#fff;
+    border:none;border-radius:8px;padding:12px 18px}
+  button.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px}
+  .fstatus{font-size:13px;color:var(--ink-3)}
+  .fstatus.err{color:var(--loss)} .fstatus.busy{color:var(--accent)}
+  .checks{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+  .chk{display:flex;gap:9px;align-items:flex-start;font-size:13.5px;cursor:pointer}
+  .chk input{width:auto;margin-top:3px}
+  .verdict{border-radius:var(--r);padding:14px 16px;color:#fff}
+  .verdict .tag{font-size:12.5px;opacity:.85;font-weight:700}
+  .verdict .big{font-size:22px;font-weight:800;margin:4px 0 2px}
+  .verdict .line{font-size:13.5px;opacity:.92}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
+  .kpi{background:#F7F9FB;border:1px solid var(--line-2);border-radius:8px;padding:10px 12px}
+  .kpi .k{font-size:11.5px;color:var(--ink-3)}
+  .kpi .v{font-size:18px;font-weight:700;margin-top:2px}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{padding:8px 10px;text-align:right;border-bottom:1px solid var(--line-2)}
+  th{font-size:12px;color:var(--ink-2);font-weight:600;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  tbody tr:last-child td{border-bottom:none}
+  .gain-t{color:var(--gain)} .loss-t{color:var(--loss)}
+  .note{font-size:13px;color:var(--ink-2);margin-top:10px}
+  .warn-t{color:var(--amber);font-weight:600}
+  details{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:0 14px}
+  summary{cursor:pointer;padding:13px 0;font-weight:600;font-size:14.5px}
+  .dbody{padding:12px 0 14px;font-size:13.5px;color:var(--ink-2)}
+  .dbody ul{margin:8px 0;padding-left:18px} .dbody li{margin:4px 0}
+  footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink-3)}
+  @media (max-width:820px){
+    .grid{grid-template-columns:repeat(2,1fr)}
+    .kpis{grid-template-columns:repeat(2,1fr)}
+    h1{font-size:20px} .wrap{padding:14px 13px 60px}
+    table{font-size:12.5px} th,td{padding:7px 6px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <nav>
+    <a href="index.html">상황별 적정주가 계산기</a>
+    <a href="momentum.html">국내 모멘텀</a>
+    <a href="us-momentum.html">미국장 모멘텀</a>
+    <a href="screener.html">저평가·수급</a>
+  </nav>
+  <h1>조건식 백테스트</h1>
+  <p class="sub">
+    조건식을 과거 봉에 되돌려 신호를 전부 찾고, 그 뒤 며칠이 어땠는지 셉니다.
+    목적은 좋은 조건식을 찾아주는 게 아니라, <b>조건을 바꿨을 때 나아졌는지 알 수 있게</b> 하는 것입니다.
+    필터를 하나씩 켜고 끄면서 아래 비교표에 쌓아 보십시오.
+  </p>
+  <div class="warnbox">
+    <b>백테스트 성적은 실제보다 항상 좋게 나옵니다.</b>
+    슬리피지·수수료·상한가 미체결·거래량 부족으로 못 사는 경우가 반영되지 않습니다.
+    그리고 조건을 수십 번 바꿔가며 제일 좋은 걸 고르면 과거에만 맞는 조합을 고르게 됩니다 —
+    그래서 뒤쪽 구간을 떼어두고 <b>검증 구간</b> 성적을 따로 보여줍니다. 그쪽이 무너지면 그 조건은 버리십시오.
+  </div>
+</header>
+
+<section>
+  <div class="stitle"><h2>설정</h2><span>처음에는 종목 수를 작게 잡으세요</span></div>
+  <div class="panel">
+    <div class="grid">
+      <div class="f">
+        <label for="market">시장</label>
+        <select id="market">
+          <option value="ALL" selected>코스피+코스닥</option>
+          <option value="KOSPI">코스피</option>
+          <option value="KOSDAQ">코스닥</option>
+          <option value="US">미국</option>
+        </select>
+      </div>
+      <div class="f">
+        <label for="n">종목 수</label>
+        <input id="n" type="number" value="40" min="5" max="200" step="10">
+        <span class="hint">40종목이면 1~2분</span>
+      </div>
+      <div class="f">
+        <label for="krDays">국내 기간 (일)</label>
+        <input id="krDays" type="number" value="1100" min="300" max="1800" step="100">
+        <span class="hint">1100이면 약 3년</span>
+      </div>
+      <div class="f">
+        <label for="range">미국 기간</label>
+        <select id="range">
+          <option value="2y">2년</option>
+          <option value="5y" selected>5년</option>
+          <option value="10y">10년</option>
+        </select>
+      </div>
+    </div>
+
+    <p class="note" style="margin-top:14px"><b>매매 규칙</b> — 신호 다음 봉 시가에 사고, 아래 조건 중 먼저 닿는 쪽에 팝니다.</p>
+    <div class="grid">
+      <div class="f">
+        <label for="target">목표 수익률 (%)</label>
+        <input id="target" type="number" value="7" step="0.5" min="0.5">
+      </div>
+      <div class="f">
+        <label for="stop">손절폭 (%)</label>
+        <input id="stop" type="number" value="5" step="0.5" min="0.5">
+      </div>
+      <div class="f">
+        <label for="hold">최대 보유 (거래일)</label>
+        <input id="hold" type="number" value="10" step="1" min="1" max="40">
+        <span class="hint">기간 만료 시 종가 청산</span>
+      </div>
+      <div class="f">
+        <label for="splitDate">검증 구간 시작일</label>
+        <input id="splitDate" type="date">
+        <span class="hint">비워두면 뒤 3분의 1을 자동으로 뗍니다</span>
+      </div>
+    </div>
+
+    <p class="note" style="margin-top:16px"><b>조건</b></p>
+    <div class="checks">
+      <label class="chk"><input type="checkbox" id="useBase" checked>
+        <span id="baseLabel">내 조건식 사용</span></label>
+      <div id="filterList" style="display:flex;flex-direction:column;gap:8px;padding-left:2px"></div>
+    </div>
+
+    <div class="row">
+      <button class="act" id="btnRun">백테스트 실행</button>
+      <button class="act ghost" id="btnClear">비교표 지우기</button>
+      <span id="status" class="fstatus">종목별로 긴 일봉을 받아옵니다. 처음 실행은 데이터를 받느라 더 걸리고, 두 번째부터는 캐시로 빨라집니다.</span>
+    </div>
+  </div>
+</section>
+
+<section id="resultSec" style="display:none">
+  <div class="stitle"><h2>결과</h2><span id="resultMeta"></span></div>
+  <div class="panel">
+    <div class="verdict" id="verdict"></div>
+    <div class="kpis" id="kpis"></div>
+    <p class="note" id="edgeNote"></p>
+
+    <p class="note" style="margin-top:16px"><b>구간별</b> — 검증 구간은 조건을 고를 때 쓰지 않은 기간입니다.</p>
+    <table>
+      <thead><tr><th>구간</th><th>건수</th><th>평균</th><th>승률</th><th>목표도달</th><th>손절</th><th>기간만료</th></tr></thead>
+      <tbody id="splitTable"></tbody>
+    </table>
+
+    <p class="note" style="margin-top:16px"><b>조건 충족 개수별</b> — 빡빡하게 걸수록 나아지는지 봅니다.</p>
+    <table>
+      <thead><tr><th>충족</th><th>건수</th><th>평균</th><th>승률</th></tr></thead>
+      <tbody id="passTable"></tbody>
+    </table>
+  </div>
+</section>
+
+<section id="compareSec" style="display:none">
+  <div class="stitle"><h2>변형 비교</h2><span>실행할 때마다 쌓입니다</span></div>
+  <div class="panel" style="overflow-x:auto">
+    <table>
+      <thead><tr>
+        <th>조건</th><th>건수</th><th>평균</th><th>승률</th><th>목표도달</th>
+        <th>검증구간 평균</th><th>검증 건수</th><th>벤치대비</th>
+      </tr></thead>
+      <tbody id="compareTable"></tbody>
+    </table>
+    <p class="note">검증 구간 성적이 학습 구간보다 크게 나쁘면 그 조합은 과거에만 맞는 것입니다. 건수가 30 미만이면 숫자를 믿지 마십시오.</p>
+  </div>
+</section>
+
+<section id="tradesSec" style="display:none">
+  <div class="stitle"><h2>최근 매매</h2><span>계산이 맞는지 눈으로 확인</span></div>
+  <div class="panel" style="overflow-x:auto">
+    <table>
+      <thead><tr><th>신호일</th><th>종목</th><th>진입</th><th>청산</th><th>결과</th><th>사유</th><th>보유</th><th>최대상승</th><th>최대하락</th></tr></thead>
+      <tbody id="tradeTable"></tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <details>
+    <summary>이 숫자를 어떻게 읽는가</summary>
+    <div class="dbody">
+      <ul>
+        <li><b>벤치마크 대비</b>가 가장 중요합니다. 상승장에서는 아무 날이나 사도 오릅니다. 신호가 의미 있으려면 아무 날 진입 평균보다 나아야 합니다. 이 값이 0 근처면 그 조건식은 아무것도 하고 있지 않은 것입니다.</li>
+        <li><b>목표 도달률</b>이 “5~10% 먹고 나오는 그림”에 해당합니다. 승률보다 이 숫자를 보십시오. 승률은 +0.1%도 승리로 세지만 그건 먹은 게 아닙니다.</li>
+        <li><b>평균 최대상승폭(MFE)</b>이 목표치에 한참 못 미치면, 목표를 낮춰야 한다는 뜻입니다. 반대로 MFE가 목표보다 훨씬 크면 너무 일찍 팔고 있는 것입니다.</li>
+        <li><b>평균 최대하락폭(MAE)</b>은 손절폭을 정하는 근거입니다. MAE가 -8%인데 손절을 5%에 두면 이길 거래도 손절로 끝납니다.</li>
+        <li><b>건수 30 미만</b>은 통계가 아닙니다. 종목 수나 기간을 늘리십시오.</li>
+        <li><b>검증 구간</b>에서 무너지면 버리십시오. 학습 구간 성적이 아무리 좋아도 의미 없습니다.</li>
+      </ul>
+    </div>
+  </details>
+  <details style="margin-top:8px">
+    <summary>한계</summary>
+    <div class="dbody">
+      <ul>
+        <li>슬리피지·수수료·세금이 없습니다. 실제 수익률은 이보다 낮습니다.</li>
+        <li>상한가에 걸려 못 사거나 거래량이 모자라 못 사는 경우가 반영되지 않습니다. 소형주일수록 차이가 큽니다.</li>
+        <li>목표·손절이 같은 날 둘 다 닿으면 일봉만으로는 순서를 알 수 없어 손절로 셉니다. 실제보다 보수적입니다.</li>
+        <li>지금 유니버스는 <b>현재 시점의</b> 시가총액 상위입니다. 과거에 상장폐지됐거나 순위 밖으로 밀려난 종목은 빠져 있어, 살아남은 종목만 보는 편향이 있습니다. 성적이 실제보다 좋게 나오는 방향입니다.</li>
+        <li>국내 일봉은 수정주가 기준이라 액면분할·증자 이력이 있는 종목은 HTS와 값이 다를 수 있습니다.</li>
+      </ul>
+    </div>
+  </details>
+</section>
+
+<footer>
+  이 페이지는 계산 도구입니다. 과거 성적은 미래 수익을 보장하지 않으며, 투자 판단과 그 결과는 이용자 본인의 몫입니다.
+  <div id="buildInfo" style="margin-top:6px"></div>
+</footer>
+
+</div>
+
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function pct(n, d){ return (n==null || !isFinite(n)) ? '—' : (n>=0?'+':'') + n.toFixed(d==null?2:d) + '%'; }
+  function plain(n, d){ return (n==null || !isFinite(n)) ? '—' : n.toFixed(d==null?1:d) + '%'; }
+  function cls(n){ return (n==null) ? '' : (n>=0 ? 'gain-t' : 'loss-t'); }
+  function status(msg, kind){ var e=$('status'); e.className='fstatus'+(kind?' '+kind:''); e.textContent=msg; }
+
+  var FILTERS = [];
+  var comparisons = [];
+
+  fetch('/api/backtest/filters').then(function(r){ return r.json(); }).then(function(j){
+    FILTERS = j.filters || [];
+    $('baseLabel').textContent = '내 조건식 사용 (' + (j.baseLabel || '조건 ' + j.baseConditionCount + '개') + ')';
+    $('filterList').innerHTML = FILTERS.map(function(f){
+      return '<label class="chk"><input type="checkbox" class="filt" value="' + esc(f.id) + '">'
+        + '<span>' + esc(f.label) + '</span></label>';
+    }).join('');
+  }).catch(function(){ status('필터 목록을 불러오지 못했습니다.', 'err'); });
+
+  function chosenFilters(){
+    return Array.prototype.slice.call(document.querySelectorAll('.filt:checked')).map(function(el){ return el.value; });
+  }
+  function variantLabel(){
+    var parts = [];
+    if($('useBase').checked) parts.push('기본식');
+    chosenFilters().forEach(function(id){
+      var f = FILTERS.filter(function(x){ return x.id===id; })[0];
+      parts.push(f ? f.label.split(' (')[0] : id);
+    });
+    return parts.length ? parts.join(' + ') : '(조건 없음)';
+  }
+
+  $('btnRun').addEventListener('click', function(){
+    var qs = new URLSearchParams({
+      market: $('market').value, n: $('n').value,
+      krDays: $('krDays').value, range: $('range').value,
+      target: $('target').value, stop: $('stop').value, hold: $('hold').value,
+      base: $('useBase').checked ? '1' : '0',
+      filters: chosenFilters().join(','),
+    });
+    if($('splitDate').value) qs.set('splitDate', $('splitDate').value);
+
+    var label = variantLabel();
+    status('백테스트 중… ' + label, 'busy');
+    fetch('/api/backtest?' + qs.toString()).then(function(r){
+      return r.json().then(function(j){ if(!r.ok) throw new Error(j.error || ('HTTP '+r.status)); return j; });
+    }).then(function(d){ render(d, label); }).catch(function(e){
+      status('실패 — ' + e.message, 'err');
+    });
+  });
+
+  $('btnClear').addEventListener('click', function(){
+    comparisons = [];
+    $('compareSec').style.display = 'none';
+  });
+
+  function render(d, label){
+    var o = d.overall;
+    status(d.dataFrom + ' ~ ' + d.dataTo + ' · ' + d.stocksUsed + '종목'
+      + (d.stocksFailed ? '(실패 ' + d.stocksFailed + ')' : '')
+      + ' · 신호 ' + o.trades + '건'
+      + ' · 검증구간 시작 ' + d.splitDate);
+
+    $('resultSec').style.display = 'block';
+    $('resultMeta').textContent = label;
+
+    if(!o.trades){
+      $('verdict').style.background = '#4A5966';
+      $('verdict').innerHTML = '<div class="tag">신호 없음</div><div class="big">0건</div>'
+        + '<div class="line">조건이 너무 빡빡합니다. 필터를 줄이거나 종목 수·기간을 늘리세요.</div>';
+      $('kpis').innerHTML = ''; $('splitTable').innerHTML = ''; $('passTable').innerHTML = '';
+      $('tradesSec').style.display = 'none';
+      return;
+    }
+
+    var edge = o.edgeVsBenchmarkPct;
+    var good = edge != null && edge > 0.5 && o.trades >= 30;
+    $('verdict').style.background = good ? '#12704C' : (edge != null && edge < 0 ? '#B4451C' : '#A97614');
+    $('verdict').innerHTML =
+      '<div class="tag">목표 ' + $('target').value + '% · 손절 ' + $('stop').value + '% · 최대 ' + $('hold').value + '일 보유</div>'
+      + '<div class="big">목표 도달 ' + plain(o.targetHitRatePct) + ' · 평균 ' + pct(o.avgReturnPct) + '</div>'
+      + '<div class="line">' + (o.trades < 30
+          ? '신호 ' + o.trades + '건뿐입니다 — 통계로 보기 어렵습니다.'
+          : (edge > 0.5 ? '아무 날이나 진입한 경우보다 ' + pct(edge) + ' 낫습니다.'
+             : edge < 0 ? '아무 날이나 진입한 경우보다 오히려 나쁩니다.'
+             : '아무 날이나 진입한 경우와 거의 차이가 없습니다.')) + '</div>';
+
+    $('kpis').innerHTML = [
+      ['신호 건수', o.trades + '건'],
+      ['목표 도달률', plain(o.targetHitRatePct)],
+      ['손절률', plain(o.stopHitRatePct)],
+      ['승률', plain(o.winRatePct)],
+      ['평균 최대상승(MFE)', pct(o.avgMfePct)],
+      ['평균 최대하락(MAE)', pct(o.avgMaePct)],
+      ['기간 다 채웠을 때', pct(o.avgBuyHoldPct)],
+      ['아무 날 진입 평균', pct(o.benchmarkAvgPct)],
+    ].map(function(x){
+      return '<div class="kpi"><div class="k">' + x[0] + '</div><div class="v">' + x[1] + '</div></div>';
+    }).join('');
+
+    var notes = [];
+    if(o.trades < 30) notes.push('<span class="warn-t">표본이 30건 미만입니다.</span>');
+    if(o.avgMfePct != null && o.avgMfePct < Number($('target').value))
+      notes.push('평균 최대상승폭이 목표치에 못 미칩니다 — 목표를 ' + Math.max(1, Math.floor(o.avgMfePct)) + '% 근처로 낮춰 보십시오.');
+    if(o.avgMaePct != null && Math.abs(o.avgMaePct) > Number($('stop').value))
+      notes.push('평균 최대하락폭이 손절폭보다 큽니다 — 이길 거래도 손절로 끝나고 있을 수 있습니다.');
+    $('edgeNote').innerHTML = notes.join(' ');
+
+    var rows = [['전체', o], ['학습 구간', d.train], ['검증 구간', d.test]];
+    $('splitTable').innerHTML = rows.map(function(r){
+      var s = r[1];
+      if(!s || !s.trades) return '<tr><td>' + r[0] + '</td><td colspan="6">신호 없음</td></tr>';
+      return '<tr><td>' + r[0] + '</td><td>' + s.trades + '</td>'
+        + '<td class="' + cls(s.avgReturnPct) + '">' + pct(s.avgReturnPct) + '</td>'
+        + '<td>' + plain(s.winRatePct) + '</td><td>' + plain(s.targetHitRatePct) + '</td>'
+        + '<td>' + plain(s.stopHitRatePct) + '</td><td>' + plain(s.timeoutRatePct) + '</td></tr>';
+    }).join('');
+
+    $('passTable').innerHTML = (d.byPassCount||[]).map(function(p){
+      return '<tr><td>' + p.passCount + '개</td><td>' + p.trades + '</td>'
+        + '<td class="' + cls(p.avgReturnPct) + '">' + pct(p.avgReturnPct) + '</td>'
+        + '<td>' + plain(p.winRatePct) + '</td></tr>';
+    }).join('');
+
+    if((d.sampleTrades||[]).length){
+      $('tradesSec').style.display = 'block';
+      $('tradeTable').innerHTML = d.sampleTrades.map(function(t){
+        return '<tr><td>' + t.date + '</td><td>' + esc(t.name || t.code) + '</td>'
+          + '<td>' + t.entry + '</td><td>' + t.exit + '</td>'
+          + '<td class="' + cls(t.returnPct) + '">' + pct(t.returnPct) + '</td>'
+          + '<td>' + ({target:'목표', stop:'손절', timeout:'만료'}[t.exitReason] || t.exitReason) + '</td>'
+          + '<td>' + t.exitBars + '일</td><td>' + pct(t.mfePct) + '</td><td>' + pct(t.maePct) + '</td></tr>';
+      }).join('');
+    }
+
+    comparisons.push({ label: label, o: o, test: d.test });
+    $('compareSec').style.display = 'block';
+    $('compareTable').innerHTML = comparisons.map(function(c){
+      var t = c.test || {};
+      return '<tr><td>' + esc(c.label) + '</td><td>' + c.o.trades + '</td>'
+        + '<td class="' + cls(c.o.avgReturnPct) + '">' + pct(c.o.avgReturnPct) + '</td>'
+        + '<td>' + plain(c.o.winRatePct) + '</td><td>' + plain(c.o.targetHitRatePct) + '</td>'
+        + '<td class="' + cls(t.avgReturnPct) + '">' + pct(t.avgReturnPct) + '</td>'
+        + '<td>' + (t.trades || 0) + '</td>'
+        + '<td class="' + cls(c.o.edgeVsBenchmarkPct) + '">' + pct(c.o.edgeVsBenchmarkPct) + '</td></tr>';
+    }).join('');
+  }
+
+  var PAGE_VERSION = '2026-09-12b';
+  fetch('/api/health').then(function(r){ return r.json(); }).then(function(j){
+    var same = j.build && j.build.indexOf(PAGE_VERSION) === 0;
+    $('buildInfo').innerHTML = '화면 ' + PAGE_VERSION + ' · 서버 ' + esc(j.build || '(표시 없음)')
+      + (same ? '' : ' <b style="color:#B4451C">— 화면과 서버 판이 다릅니다.</b>');
+  }).catch(function(){});
+})();
+</script>
+</body>
+</html>

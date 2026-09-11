@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>모멘텀·섹터 스크리너</title>
+<title>미국장 모멘텀·섹터 스크리너</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20rx='14'%20fill='%2316202C'/%3E%3Crect%20x='14'%20y='34'%20width='8'%20height='18'%20rx='2'%20fill='%23C8342B'/%3E%3Crect%20x='28'%20y='22'%20width='8'%20height='30'%20rx='2'%20fill='%23A97614'/%3E%3Crect%20x='42'%20y='14'%20width='8'%20height='38'%20rx='2'%20fill='%231F5FBF'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
 <style>
@@ -124,16 +124,17 @@
 <header>
   <nav>
     <a href="index.html">상황별 적정주가 계산기</a>
-    <a href="us-momentum.html">미국장 모멘텀 스크리너</a>
+    <a href="momentum.html">국내 모멘텀 스크리너</a>
     <a href="backtest.html">조건식 백테스트</a>
     <a href="screener.html">저평가·수급 스크리너</a>
     <a href="simulator.html">물타기·불타기 시뮬레이터</a>
   </nav>
-  <h1>모멘텀·섹터 스크리너</h1>
+  <h1>미국장 모멘텀·섹터 스크리너</h1>
   <p class="sub">
-    내가 정한 조건식을 유니버스 전체에 적용하고, 같은 날 업종별 강도를 함께 매겨 코스피·코스닥 각 3종목을 뽑습니다.
-    재무 기반인 <a href="screener.html">저평가·수급 스크리너</a>는 분기 실적이 바뀌기 전까지 후보가 거의 안 바뀌지만,
-    이 탭은 그날의 돌파를 보기 때문에 후보가 매일 달라집니다.
+    <a href="momentum.html">국내 모멘텀 탭</a>과 같은 조건식·같은 지표를 미국 상장 종목에 적용합니다.
+    데이터는 나스닥 스크리너(유니버스)와 야후 차트(일봉)에서 받아옵니다.
+    미국은 기관·외국인 일별 순매수가 공개되지 않아 <b>수급 축이 없습니다</b> —
+    조건 충족·섹터 강도·거래량 급증 세 축으로 순위를 매기고 적정주가를 얹습니다.
   </p>
   <div class="warnbox">
     <b>이 페이지는 투자 권유가 아닙니다.</b>
@@ -159,25 +160,81 @@
   <div class="panel">
     <div class="grid">
       <div class="f">
-        <label for="market">대상 시장</label>
-        <select id="market">
-          <option value="ALL" selected>코스피+코스닥</option>
-          <option value="KOSPI">코스피만</option>
-          <option value="KOSDAQ">코스닥만</option>
+        <label for="mode">유니버스 기준</label>
+        <select id="mode">
+          <option value="marketCap" selected>시가총액 상위</option>
+          <option value="turnover">거래대금 상위</option>
         </select>
+        <span class="hint">거래대금 쪽이 잘 움직이는 종목을 잡습니다</span>
       </div>
       <div class="f">
-        <label for="n">유니버스 (시가총액 상위)</label>
-        <input id="n" type="number" value="300" min="20" max="2000" step="50">
-        <span class="hint">HTS 조건검색은 전 종목을 봅니다. 중소형주까지 잡으려면 1000~2000으로 올리세요(2~3분 소요).</span>
+        <label for="n">유니버스 크기</label>
+        <input id="n" type="number" value="300" min="20" max="600" step="50">
+        <span class="hint">300종목이면 2~3분. 야후 한도 때문에 국내보다 느립니다</span>
       </div>
       <div class="f">
         <label for="barsAgo">기준 봉</label>
         <select id="barsAgo">
-          <option value="0" selected>0봉전 (오늘 · 장중 확인)</option>
-          <option value="1">1봉전 (전일 확정 종가)</option>
+          <option value="0" selected>0봉전 (최근 봉)</option>
+          <option value="1">1봉전 (그 전날)</option>
         </select>
+        <span class="hint">미국장 마감이 한국 새벽이라 낮에는 전일 확정봉입니다</span>
       </div>
+      <div class="f">
+        <label for="minPass">최소 조건 충족 개수</label>
+        <select id="minPass"></select>
+      </div>
+    </div>
+
+    <p class="note" style="margin-top:14px">
+      아래 넷은 <b>작전주를 거르는 하한선</b>입니다. 거래대금 기준으로 뽑을 때 특히 중요합니다.
+    </p>
+    <div class="grid">
+      <div class="f">
+        <label for="minPrice">최소 주가 ($)</label>
+        <input id="minPrice" type="number" value="5" step="1" min="0">
+        <span class="hint">SEC 페니스톡 기준선</span>
+      </div>
+      <div class="f">
+        <label for="minMarketCap">최소 시가총액 (백만$)</label>
+        <input id="minMarketCap" type="number" value="500" step="100" min="0">
+      </div>
+      <div class="f">
+        <label for="minTurnover">최소 거래대금 (백만$)</label>
+        <input id="minTurnover" type="number" value="20" step="5" min="0">
+        <span class="hint"><b>20일 평균</b>입니다. 하루 띄운 종목은 여기서 걸립니다</span>
+      </div>
+      <div class="f">
+        <label for="minListedYears">최소 상장 경과 (년)</label>
+        <input id="minListedYears" type="number" value="1" step="1" min="0">
+        <span class="hint">IPO·SPAC 합병 직후 제외</span>
+      </div>
+    </div>
+
+    <p class="note" style="margin-top:14px">
+      아래 넷은 <b>순위 가중치</b>입니다. 조건식을 전부 만족한 종목이 항상 앞에 옵니다.
+    </p>
+    <div class="grid">
+      <div class="f">
+        <label for="weightCond">조건 충족 가중치</label>
+        <input id="weightCond" type="number" value="40" step="5" min="0">
+      </div>
+      <div class="f">
+        <label for="weightSector">섹터 강도 가중치</label>
+        <input id="weightSector" type="number" value="30" step="5" min="0">
+      </div>
+      <div class="f">
+        <label for="weightVolume">거래량 급증 가중치</label>
+        <input id="weightVolume" type="number" value="10" step="5" min="0">
+        <span class="hint">높이면 급등 자체를 쫓게 됩니다</span>
+      </div>
+      <div class="f">
+        <label for="weightKeyword">테마 키워드 가중치</label>
+        <input id="weightKeyword" type="number" value="20" step="5" min="0">
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:14px">
       <div class="f">
         <label for="regime">시장 국면 <span class="hint">— 적정주가 계산용</span></label>
         <select id="regime">
@@ -188,57 +245,19 @@
       </div>
       <div class="f">
         <label for="kbase">기준 요구수익률 (%)</label>
-        <input id="kbase" type="number" value="4.64" step="0.01">
+        <input id="kbase" type="number" value="5.5" step="0.01">
+        <span class="hint">미국 회사채 수준</span>
       </div>
-      <div class="f">
-        <label for="minTurnover">최소 평균거래대금 (억원)</label>
-        <input id="minTurnover" type="number" value="30" step="10" min="0">
-        <span class="hint">20일 평균. 유니버스를 넓혔다면 이 값도 낮춰야 소형주가 남습니다</span>
-      </div>
-    </div>
-
-    <p class="note" style="margin-top:14px">
-      아래 넷은 <b>순위 가중치</b>입니다. 조건식을 전부 만족한 종목이 항상 앞에 오고, 그 안에서 이 점수로 정렬합니다.
-    </p>
-    <div class="grid">
-      <div class="f">
-        <label for="weightCond">조건 충족 가중치</label>
-        <input id="weightCond" type="number" value="40" step="5" min="0">
-        <span class="hint">5개 중 몇 개를 만족했는가</span>
-      </div>
-      <div class="f">
-        <label for="weightSector">섹터 강도 가중치</label>
-        <input id="weightSector" type="number" value="30" step="5" min="0">
-        <span class="hint">그날 강한 업종에 속했는가</span>
-      </div>
-      <div class="f">
-        <label for="weightVolume">거래량 급증 가중치</label>
-        <input id="weightVolume" type="number" value="20" step="5" min="0">
-        <span class="hint">당일 ÷ 20일 평균 거래량</span>
-      </div>
-      <div class="f">
-        <label for="weightKeyword">테마 키워드 가중치</label>
-        <input id="weightKeyword" type="number" value="10" step="5" min="0">
-        <span class="hint">아래 키워드에 걸리면 가점</span>
-      </div>
-    </div>
-
-    <div class="grid2" style="margin-top:14px">
-      <div class="f">
-        <label for="keywords">테마 키워드 <span class="hint">— 국내외 정세에 대한 본인 판단을 여기에 넣습니다</span></label>
-        <input id="keywords" type="text" value="반도체,조선,방산,전력,원자력" placeholder="쉼표로 구분 · 예: 반도체, 조선, 방산">
-        <span class="hint">업종명이나 종목명에 이 단어가 들어가면 점수에 가점을 줍니다. 비워두면 순수 데이터 기준으로만 뽑습니다.</span>
-      </div>
-      <div class="f">
-        <label for="minPass">최소 조건 충족 개수</label>
-        <select id="minPass"></select>
-        <span class="hint">완전 일치만 보려면 최대값. 그날 신호가 없으면 결과가 0개일 수 있습니다.</span>
+      <div class="f" style="grid-column:span 2">
+        <label for="keywords">테마 키워드 <span class="hint">— 영문으로 넣습니다</span></label>
+        <input id="keywords" type="text" value="Semiconductor,Energy,Defense,Utilities" placeholder="쉼표로 구분 · 예: Semiconductor, Energy">
+        <span class="hint">섹터·업종·종목명에 걸리면 가점. 대소문자는 무시합니다.</span>
       </div>
     </div>
 
     <div class="row">
       <button class="act" id="btnScan">스캔 실행</button>
-      <span id="status" class="fstatus">종목당 일봉 120일치를 받아옵니다. 300종목이면 1분 안팎, 2000종목이면 2~3분 걸립니다. 같은 날 같은 조건이면 캐시된 결과가 바로 나옵니다.</span>
+      <span id="status" class="fstatus">나스닥 스크리너로 후보군을 추린 뒤 종목별 일봉을 받아옵니다. 야후 한도 때문에 300종목이면 2~3분 걸립니다.</span>
     </div>
   </div>
 </section>
@@ -255,12 +274,8 @@
 </section>
 
 <section id="resultSec" style="display:none">
-  <div class="stitle"><h2>코스피 TOP <span class="nTop">3</span></h2><span id="scanMeta"></span></div>
+  <div class="stitle"><h2>TOP <span class="nTop">6</span></h2><span id="scanMeta"></span></div>
   <div id="cards" class="cards"></div>
-  <div id="kosdaqSec" style="display:none">
-    <div class="stitle" style="margin-top:22px"><h2>코스닥 TOP <span class="nTop">3</span></h2></div>
-    <div id="cardsKosdaq" class="cards"></div>
-  </div>
   <p class="empty" id="emptyMsg" style="display:none">조건을 만족한 종목이 없습니다. “최소 조건 충족 개수”를 낮추거나, 최소 거래대금을 내리거나, 유니버스를 넓혀 보세요.</p>
 </section>
 
@@ -268,7 +283,7 @@
   <div class="stitle"><h2>다음 순위</h2><span>참고용</span></div>
   <div class="panel">
     <table>
-      <thead><tr><th>종목</th><th>업종</th><th>조건</th><th>점수</th><th>종가</th><th>거래량비율</th><th>5일</th><th>20일</th></tr></thead>
+      <thead><tr><th>종목</th><th>섹터</th><th>조건</th><th>점수</th><th>종가</th><th>20일평균거래대금</th><th>5일</th><th>20일</th></tr></thead>
       <tbody id="runnerTable"></tbody>
     </table>
   </div>
@@ -285,35 +300,6 @@
 </section>
 
 <section>
-  <div class="stitle"><h2>성과 검증</h2><span>이 탭의 지난 추천이 지금 몇 %인지</span></div>
-  <div class="panel">
-    <div class="grid2">
-      <div class="f">
-        <label for="recoDate">추천일</label>
-        <select id="recoDate"><option value="">(스캔을 먼저 실행해서 날짜를 만드세요)</option></select>
-      </div>
-      <div class="f">
-        <label for="asOfDate">조회일</label>
-        <input id="asOfDate" type="date">
-      </div>
-    </div>
-    <div id="recoPicks" class="note" style="margin-top:10px"></div>
-    <div class="row">
-      <button class="act ghost" id="btnPerf">성과 조회</button>
-      <span id="perfStatus" class="fstatus"></span>
-    </div>
-    <div id="perfResult" style="display:none;margin-top:14px">
-      <div class="verdict" id="perfVerdict" style="background:var(--accent)"></div>
-      <table style="margin-top:12px">
-        <thead><tr><th>종목</th><th>추천일 가격</th><th>조회일 가격</th><th>수익률</th></tr></thead>
-        <tbody id="perfTable"></tbody>
-      </table>
-    </div>
-  </div>
-  <p class="note">저평가·수급 스크리너의 추천 기록과는 따로 저장되므로 두 방식의 성적을 나눠서 비교할 수 있습니다.</p>
-</section>
-
-<section>
   <details>
     <summary>“강한 섹터”를 어떻게 정하는가</summary>
     <div class="dbody">
@@ -322,7 +308,8 @@
         <li>업종 강도 = 구성종목 <b>5일 수익률 평균의 백분위 × 0.7 + 20일 수익률 평균의 백분위 × 0.3</b>. 단기 돌파를 찾는 스크리너라 최근 5일에 더 비중을 뒀습니다.</li>
         <li>유니버스 안에 구성종목이 3개 미만인 업종은 표본이 작아 순위에서 빼고 중립(0.5)으로 둡니다.</li>
         <li>시장 국면은 지수를 따로 받지 않고 <b>유니버스 종목 중 20일선 위에 있는 비율</b>로 읽습니다. 65% 이상이면 강세, 45~65%면 중립, 45% 미만이면 약세입니다.</li>
-        <li><b>적정주가는 최종 후보에만 계산합니다.</b> 재무 조회는 종목당 요청이 여러 건이라 유니버스 전체에 돌리면 스캔이 몇 배 느려집니다. 순위가 정해진 뒤 상위 종목에만 얹습니다. 계산식은 <a href="index.html">적정주가 계산기</a>와 같고, 위 “시장 국면”과 “기준 요구수익률”을 씁니다.</li>
+        <li><b>적정주가의 ROE는 최근 12개월 값 하나입니다.</b> 야후에서 3년치 ROE를 안 주기 때문에 같은 값을 세 번 넣습니다 — “최근 ROE가 그대로 유지된다”는 가정이 됩니다. 실적 변동이 큰 기업에서는 국내 탭보다 신뢰도가 떨어지니 참고용으로만 보십시오.</li>
+        <li><b>야후 재무(quoteSummary)는 401이 자주 납니다.</b> 그러면 적정주가만 빠지고 스크리너 자체는 정상 동작합니다. <code>/api/us-fundamentals-raw/AAPL</code>로 상태를 확인할 수 있습니다.</li>
         <li><b>괴리율은 이 화면의 종가 기준</b>입니다. 음수면 적정주가보다 싸다는 뜻입니다. 자기자본을 BPS로 추정한 종목은 카드에 그 사실을 표시합니다 — 정확한 값이 필요하면 계산기에서 직접 확인하십시오.</li>
         <li><b>조건식은 저장소 코드에 없습니다.</b> 서버 환경변수 <code>MOMENTUM_CONDITIONS</code>(또는 gitignore된 <code>conditions.local.json</code>)에서만 읽으므로, GitHub 저장소가 공개돼 있어도 조건 내용은 노출되지 않습니다. 화면에서도 상단 “보이기”를 눌러야 펼쳐집니다.</li>
         <li><b>뉴스나 국제 정세를 서버가 직접 읽지는 않습니다.</b> 정세에 대한 판단은 “테마 키워드” 칸에 직접 넣으시면 그 단어가 업종명·종목명에 걸릴 때 가점으로 반영됩니다.</li>
@@ -333,8 +320,11 @@
     <summary>한계와 주의사항</summary>
     <div class="dbody">
       <ul>
-        <li>유니버스는 시가총액 상위 종목만 대상입니다. HTS 조건검색은 전 종목을 보므로, 같은 조건식이라도 결과 종목 수가 다릅니다. 여기서 안 나온 종목이 HTS에서는 나올 수 있습니다.</li>
-        <li>0봉전(장중) 기준이면 지표가 실시간으로 바뀝니다. 같은 날이라도 다시 스캔하면 순위가 달라집니다. 그날의 확정 결과가 필요하면 장 마감 후 또는 1봉전 기준으로 돌리세요.</li>
+        <li><b>거래대금 기준은 2단으로 거릅니다.</b> 나스닥 스크리너가 주는 거래량은 <b>당일</b> 값이라 그것만 보면 하루 띄운 종목이 1등으로 올라옵니다. 그래서 후보군만 그걸로 넓게 잡고, 실제 <b>20일 평균</b> 거래대금은 받아온 일봉에서 직접 계산해 거릅니다.</li>
+        <li>주가·시가총액·상장기간 하한과 워런트·유닛·우선주 제외가 기본으로 걸려 있습니다. 그래도 유통주식이 극히 적은 소형주는 완전히 걸러지지 않습니다 — 적정주가가 계산되지 않거나 괴리율이 비상식적인 종목은 의심하십시오.</li>
+        <li>미국 상장은 7천 종목이 넘습니다. 유니버스 300이면 그중 상위 300만 봅니다. HTS 전 종목 검색과 결과가 다른 것은 당연합니다.</li>
+        <li>미국장 마감은 한국 시간 새벽 5~6시입니다(서머타임 기준). 한국 낮에 돌리면 0봉전이 이미 확정된 전날 봉이라 값이 흔들리지 않습니다.</li>
+        <li>야후는 공식 API가 아니라 사이트가 쓰는 경로를 그대로 부르는 것입니다. 예고 없이 막힐 수 있어 Stooq를 예비 경로로 붙여뒀습니다.</li>
         <li>일봉은 수정주가 기준(네이버 차트)이라 액면분할·증자 이력이 있는 종목은 HTS와 지표값이 미세하게 다를 수 있습니다.</li>
         <li>HTS와 결과 차이가 크면 <code>/api/ohlcv/종목코드</code>로 조건별 지표값을 직접 대조해 보세요. 지표 파라미터 해석 차이일 수 있습니다.</li>
         <li>“강한 섹터”는 최근 수익률로 매긴 것이라 이미 많이 오른 업종이 상위에 옵니다. 지속될지 꺾일지는 이 지표로 알 수 없습니다.</li>
@@ -354,7 +344,8 @@
 <script>
 (function(){
   var $ = function(id){ return document.getElementById(id); };
-  function fmtWon(n){ return (n==null || !isFinite(n)) ? '—' : Math.round(n).toLocaleString('ko-KR') + '원'; }
+  function fmtWon(n){ return (n==null || !isFinite(n)) ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  function fmtUsdM(n){ return (n==null || !isFinite(n)) ? '—' : '$' + Math.round(n).toLocaleString('en-US') + 'M'; }
   function fmtPct(n, d){ return (n==null || !isFinite(n)) ? '—' : (n>=0?'+':'') + n.toFixed(d==null?1:d) + '%'; }
   function fmtNum(n, d){ return (n==null || !isFinite(n)) ? '—' : n.toFixed(d==null?1:d); }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){
@@ -433,9 +424,10 @@
 
   $('btnScan').addEventListener('click', function(){
     var qs = new URLSearchParams({
-      n: $('n').value, market: $('market').value, barsAgo: $('barsAgo').value,
-      minTurnover: $('minTurnover').value, minPass: $('minPass').value,
-      keywords: $('keywords').value,
+      mode: $('mode').value, n: $('n').value, barsAgo: $('barsAgo').value,
+      minPrice: $('minPrice').value, minMarketCap: $('minMarketCap').value,
+      minTurnover: $('minTurnover').value, minListedYears: $('minListedYears').value,
+      minPass: $('minPass').value, keywords: $('keywords').value,
       regime: $('regime').value, kbase: $('kbase').value,
       weightCond: $('weightCond').value, weightSector: $('weightSector').value,
       weightVolume: $('weightVolume').value, weightKeyword: $('weightKeyword').value,
@@ -443,7 +435,7 @@
     status('스캔 중입니다… 종목당 일봉을 받아오므로 1~3분 걸릴 수 있습니다.', 'busy');
     ['marketSec','resultSec','runnerSec','funnelSec'].forEach(function(id){ $(id).style.display='none'; });
 
-    fetch('/api/momentum?' + qs.toString()).then(function(r){
+    fetch('/api/us-momentum?' + qs.toString()).then(function(r){
       return r.json().then(function(j){
         if(!r.ok){ var e = new Error(j.error || ('HTTP ' + r.status)); e.stack2 = j.stack; throw e; }
         return j;
@@ -456,16 +448,17 @@
   function render(d){
     lastData = d;
     var f = d.funnel;
-    status(d.date + ' · ' + (d.barsAgo ? '전일 확정봉' : '당일봉') + ' 기준 · 유니버스 ' + d.universeSize
-      + '종목 · 지표계산 성공 ' + d.consideredCount + '(제외 ' + d.skippedCount + ') · 조건식 완전충족 '
-      + f.strict + '종목' + (f.nearMiss ? ' · 1개 모자람 ' + f.nearMiss + '종목' : '')
-      + (d.conditionsConfigured ? '' : ' ⚠ 조건 정의가 설정되지 않아 섹터·거래량만으로 순위를 매겼습니다')
-      + (d.universeStaleHours != null ? ' ⚠ 시가총액 순위를 못 받아 ' + d.universeStaleHours + '시간 전 목록으로 스캔했습니다' : ''));
+    status(d.date + ' · ' + (d.universeMode === 'turnover' ? '거래대금' : '시가총액') + ' 상위 기준'
+      + ' · 사전필터 통과 ' + f.universeAfterPrefilter + '종목 중 ' + f.fetched + '종목 조회'
+      + ' · 지표계산 성공 ' + d.consideredCount
+      + ' · 조건식 완전충족 ' + f.strict + '종목'
+      + ' · 거래대금 통과 ' + f.liquidityPassed + ' → 상장기간 통과 ' + f.seasonedPassed
+      + (d.conditionsConfigured ? '' : ' ⚠ 조건 정의가 설정되지 않았습니다'));
 
     /* ── 시장 국면 ─────────────────────────────── */
-    var m = d.market;
+    var m = d.marketRead;
     var vmap = {
-      strong: { c:'#12704C', t:'강세', s:'유니버스의 다수가 20일선 위입니다. 돌파 신호의 성공률이 상대적으로 높은 국면입니다.' },
+      strong: { c:'#12704C', t:'강세', s:'조회한 종목의 다수가 20일선 위입니다. 돌파 신호의 성공률이 상대적으로 높은 국면입니다.' },
       neutral:{ c:'#A97614', t:'중립', s:'절반 안팎만 20일선 위입니다. 업종별로 갈리는 순환매 장세일 수 있습니다.' },
       weak:   { c:'#B4451C', t:'약세', s:'대부분이 20일선 아래입니다. 돌파 신호가 되돌려질 확률이 커지는 국면입니다.' },
       unknown:{ c:'#4A5966', t:'판정 불가', s:'데이터가 모자랍니다.' }
@@ -476,10 +469,10 @@
       '<div class="tag">시장 국면</div>'
       + '<div class="big">' + v.t + ' · 20일선 위 ' + (m.aboveMa20Pct==null?'—':m.aboveMa20Pct + '%') + '</div>'
       + '<div class="line">60일선 위 ' + (m.aboveMa60Pct==null?'—':m.aboveMa60Pct+'%')
-      + ' · 유니버스 평균 5일 수익률 ' + fmtPct(m.avgRet5)
+      + ' · 평균 5일 수익률 ' + fmtPct(m.avgRet5)
       + ' · 조건식 완전충족 ' + m.strictCount + '종목</div>'
       + '<div class="line" style="margin-top:6px">' + v.s + '</div>';
-    $('marketMeta').textContent = d.sectorError ? '업종 분류를 못 읽어 섹터 가중치는 중립으로 처리됨' : '';
+    $('marketMeta').textContent = '섹터는 나스닥 스크리너의 GICS 분류';
 
     function chipHtml(s, down){
       return '<span class="chip' + (down?' dn':'') + '" data-sector="' + esc(s.name) + '">'
@@ -519,7 +512,7 @@
       }).join('') : '';
       return '<div class="cand' + (c.strict ? '' : ' near') + '">'
         + '<div class="rank">' + (i+1) + '순위 · 점수 ' + Math.round(c.score*100) + '</div>'
-        + '<h3>' + esc(c.name) + ' <span class="code">' + c.code + '</span></h3>'
+        + '<h3>' + esc(c.code) + ' <span class="code">' + esc(c.name) + '</span></h3>'
         + '<div style="margin-top:6px">' + tag
         + (c.sector ? ' <span class="sec">' + esc(c.sector) + ' ' + Math.round((c.sectorStrength||0)*100) + '</span>' : '')
         + (c.keywordHit ? ' <span class="sec" style="background:#F3EEFA;color:#6B3FA0">테마</span>' : '')
@@ -536,32 +529,32 @@
             : '')
         + valueRows
         + '<div class="metric"><span>거래량비율</span><span>' + (c.volumeRatio==null?'—':c.volumeRatio.toFixed(2)+'배') + '</span></div>'
+        + '<div class="metric"><span>시가총액</span><span>' + fmtUsdM(c.marketCapM) + '</span></div>'
         + '<div class="metric"><span>5일 / 20일</span><span class="' + (c.ret5>=0?'gain-t':'loss-t') + '">'
         + fmtPct(c.ret5) + ' / ' + fmtPct(c.ret20) + '</span></div>'
-        + '<div class="metric"><span>평균거래대금</span><span>' + fmtNum(c.avgTurnoverEok,0) + '억</span></div>'
+        + '<div class="metric"><span>20일 평균거래대금</span><span>' + fmtUsdM(c.avgTurnoverM) + '</span></div>'
+        + (c.ipoYear ? '<div class="metric"><span>상장</span><span>' + c.ipoYear + '년</span></div>' : '')
         + '</div>';
     }
     function cardsHtml(list){ return list.map(cardHtml).join(''); }
 
     $('resultSec').style.display = 'block';
     $('scanMeta').textContent = (d.asOfBarDate || d.date) + ' 봉 기준';
-    var kp = d.candidatesKospi || [], kd = d.candidatesKosdaq || [];
-    $('cards').innerHTML = cardsHtml(kp);
-    $('kosdaqSec').style.display = (d.opt.market === 'ALL' || d.opt.market === 'KOSDAQ') ? 'block' : 'none';
-    $('cardsKosdaq').innerHTML = cardsHtml(kd);
-    $('emptyMsg').style.display = (kp.length || kd.length) ? 'none' : 'block';
+    var list = d.candidates || [];
+    $('cards').innerHTML = cardsHtml(list);
+    $('emptyMsg').style.display = list.length ? 'none' : 'block';
 
     /* ── 다음 순위 ─────────────────────────────── */
-    var runners = (d.runnerUpsKospi||[]).concat(d.runnerUpsKosdaq||[]);
+    var runners = d.runnerUps || [];
     if(runners.length){
       $('runnerSec').style.display = 'block';
       $('runnerTable').innerHTML = runners.map(function(c){
-        return '<tr><td>' + esc(c.name) + ' <span style="color:#7B8896">(' + c.code + ' · ' + (c.market||'') + ')</span></td>'
+        return '<tr><td>' + esc(c.code) + ' <span style="color:#7B8896">' + esc(c.name) + '</span></td>'
           + '<td>' + esc(c.sector || '—') + '</td>'
           + '<td>' + c.passCount + '/' + (c.condCount||'—') + (c.strict?' ✓':'') + '</td>'
           + '<td>' + Math.round(c.score*100) + '</td>'
           + '<td>' + fmtWon(c.close) + '</td>'
-          + '<td>' + (c.volumeRatio==null?'—':c.volumeRatio.toFixed(2)) + '</td>'
+          + '<td>' + (c.avgTurnoverM==null?'—':'$' + c.avgTurnoverM.toLocaleString('en-US') + 'M') + '</td>'
           + '<td class="' + (c.ret5>=0?'gain-t':'loss-t') + '">' + fmtPct(c.ret5) + '</td>'
           + '<td class="' + (c.ret20>=0?'gain-t':'loss-t') + '">' + fmtPct(c.ret20) + '</td></tr>';
       }).join('');
@@ -582,60 +575,7 @@
       return '<tr><td>' + esc(r[0]) + '</td><td>' + (r[1]==null?'—':r[1]) + '</td></tr>';
     }).join('');
 
-    refreshRecoDates(d.date);
   }
-
-  /* ── 성과 검증 ─────────────────────────────── */
-  function refreshRecoDates(selectDate){
-    fetch('/api/performance/dates?kind=momentum').then(function(r){ return r.json(); }).then(function(j){
-      var sel = $('recoDate');
-      var dates = j.dates || [];
-      if(!dates.length){ sel.innerHTML = '<option value="">(기록 없음)</option>'; return; }
-      sel.innerHTML = dates.map(function(d){ return '<option value="' + d + '">' + d + '</option>'; }).join('');
-      if(selectDate && dates.indexOf(selectDate) !== -1) sel.value = selectDate;
-      showPicks();
-    }).catch(function(){});
-  }
-  function showPicks(){
-    var d = $('recoDate').value;
-    if(!d){ $('recoPicks').textContent = ''; return; }
-    if(lastData && lastData.date === d && lastData.candidates){
-      $('recoPicks').textContent = '추천 종목: ' + lastData.candidates.map(function(c){ return c.name; }).join(', ');
-    } else { $('recoPicks').textContent = ''; }
-  }
-  $('recoDate').addEventListener('change', showPicks);
-
-  (function(){
-    var t = new Date(); t.setMinutes(t.getMinutes() - t.getTimezoneOffset());
-    $('asOfDate').value = t.toISOString().slice(0,10);
-  })();
-
-  $('btnPerf').addEventListener('click', function(){
-    var d = $('recoDate').value;
-    if(!d){ $('perfStatus').textContent = '추천일을 먼저 고르세요.'; return; }
-    $('perfStatus').className = 'fstatus busy';
-    $('perfStatus').textContent = '조회 중…';
-    var qs = new URLSearchParams({ kind:'momentum', date:d, asOf:$('asOfDate').value });
-    fetch('/api/performance?' + qs.toString()).then(function(r){
-      return r.json().then(function(j){ if(!r.ok) throw new Error(j.error || ('HTTP '+r.status)); return j; });
-    }).then(function(j){
-      $('perfStatus').className = 'fstatus';
-      $('perfStatus').textContent = j.recoDate + ' 추천 → ' + j.asOfDate + ' 기준';
-      $('perfResult').style.display = 'block';
-      var p = j.portfolioReturnPct;
-      $('perfVerdict').style.background = p==null ? '#4A5966' : (p>=0 ? '#12704C' : '#B4451C');
-      $('perfVerdict').innerHTML = '<div class="tag">추천 종목 균등매수 가정</div><div class="big">'
-        + (p==null ? '계산 불가' : fmtPct(p,2)) + '</div>';
-      $('perfTable').innerHTML = j.stocks.map(function(s){
-        return '<tr><td>' + esc(s.name) + ' <span style="color:#7B8896">(' + s.code + ')</span></td>'
-          + '<td>' + fmtWon(s.recoPrice) + '</td><td>' + fmtWon(s.asOfPrice) + '</td>'
-          + '<td class="' + (s.returnPct>=0?'gain-t':'loss-t') + '">' + fmtPct(s.returnPct,2) + '</td></tr>';
-      }).join('');
-    }).catch(function(e){
-      $('perfStatus').className = 'fstatus err';
-      $('perfStatus').textContent = '조회 실패 — ' + e.message;
-    });
-  });
 
   /* 화면 파일과 서버가 같은 판인지 한눈에 보이게 한다.
      둘이 다르면 배포가 반만 됐거나 브라우저가 예전 HTML을 들고 있는 것이다. */
@@ -647,7 +587,6 @@
   }).catch(function(){});
 
   loadConditions();
-  refreshRecoDates(null);
 })();
 </script>
 </body>

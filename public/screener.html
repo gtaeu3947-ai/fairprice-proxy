@@ -113,6 +113,8 @@
   <nav>
     <a href="index.html">상황별 적정주가 계산기</a>
     <a href="momentum.html">모멘텀·섹터 스크리너</a>
+    <a href="us-momentum.html">미국장 모멘텀 스크리너</a>
+    <a href="backtest.html">조건식 백테스트</a>
     <a href="simulator.html">물타기·불타기 시뮬레이터</a>
   </nav>
   <h1>저평가·수급 스크리너</h1>
@@ -497,7 +499,7 @@
   }
 
   refreshRecoDates();
-  var PAGE_VERSION = '2026-09-11f';
+  var PAGE_VERSION = '2026-09-12b';
   fetch('/api/health').then(function(r){ return r.json(); }).then(function(j){
     var same = j.build && j.build.indexOf(PAGE_VERSION) === 0;
     var el = document.getElementById('buildInfo');

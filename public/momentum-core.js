@@ -167,6 +167,65 @@
     return out;
   }
 
+  /** 기간 최고가 / 최저가 시계열. */
+  function rollingHigh(highs, n) {
+    const out = new Array(highs.length).fill(null);
+    for (let i = n - 1; i < highs.length; i++) {
+      let hh = -Infinity;
+      for (let j = i - n + 1; j <= i; j++) if (highs[j] > hh) hh = highs[j];
+      out[i] = hh;
+    }
+    return out;
+  }
+  function rollingLow(lows, n) {
+    const out = new Array(lows.length).fill(null);
+    for (let i = n - 1; i < lows.length; i++) {
+      let ll = Infinity;
+      for (let j = i - n + 1; j <= i; j++) if (lows[j] < ll) ll = lows[j];
+      out[i] = ll;
+    }
+    return out;
+  }
+
+  /**
+   * 종가가 n일 이동평균의 몇 %인가. 100이면 이동평균과 같은 자리.
+   * "지지선 위에 있는가"를 고정 숫자로 판정할 수 있게 하려고 비율로 만든다
+   * (조건 정의는 level이 숫자 하나라서 지표끼리 직접 비교할 수 없다).
+   */
+  function closeVsMa(closes, n) {
+    const m = sma(closes, n);
+    return closes.map((c, i) => (m[i] == null || m[i] <= 0) ? null : (c / m[i]) * 100);
+  }
+
+  /** 종가가 최근 n일 최고가의 몇 %인가. 100 이상이면 그 구간 고점을 넘어섰다는 뜻. */
+  function closeVsHigh(highs, closes, n) {
+    const hh = rollingHigh(highs, n);
+    return closes.map((c, i) => (hh[i] == null || hh[i] <= 0) ? null : (c / hh[i]) * 100);
+  }
+
+  /** 최근 n일 최고가 대비 낙폭(%). 음수. -20이면 고점에서 20% 빠진 자리. */
+  function drawdownFromHigh(highs, closes, n) {
+    const hh = rollingHigh(highs, n);
+    return closes.map((c, i) => (hh[i] == null || hh[i] <= 0) ? null : (c / hh[i] - 1) * 100);
+  }
+
+  /** 전일 종가 대비 당일 등락률(%). 과열 배제용. */
+  function dayChange(closes) {
+    return closes.map((c, i) => (i === 0 || !(closes[i - 1] > 0)) ? null : (c / closes[i - 1] - 1) * 100);
+  }
+
+  /** ATR(n)을 종가 대비 %로. 손절폭 감각과 변동성 필터에 쓴다. */
+  function atrPct(highs, lows, closes, n) {
+    n = n || 14;
+    const tr = closes.map((c, i) => {
+      if (i === 0) return highs[i] - lows[i];
+      const pc = closes[i - 1];
+      return Math.max(highs[i] - lows[i], Math.abs(highs[i] - pc), Math.abs(lows[i] - pc));
+    });
+    const a = sma(tr, n);
+    return closes.map((c, i) => (a[i] == null || !(c > 0)) ? null : (a[i] / c) * 100);
+  }
+
   /** 당일 거래량 ÷ 직전 n일 평균 거래량. */
   function volumeRatioSeries(volumes, n) {
     n = n || 20;
@@ -195,6 +254,11 @@
     close:       (b) => b.close.slice(),
     volume:      (b) => b.volume.slice(),
     volumeRatio: (b, p) => volumeRatioSeries(b.volume, p.n),
+    closeVsMa:   (b, p) => closeVsMa(b.close, p.n || 20),
+    closeVsHigh: (b, p) => closeVsHigh(b.high, b.close, p.n || 20),
+    drawdown:    (b, p) => drawdownFromHigh(b.high, b.close, p.n || 60),
+    dayChange:   (b) => dayChange(b.close),
+    atrPct:      (b, p) => atrPct(b.high, b.low, b.close, p.n || 14),
   };
 
   /* ───────────────────────── 판정 ───────────────────────── */
@@ -329,8 +393,56 @@
     return ranks;
   }
 
+  /**
+   * 모든 봉에 대해 한 번에 조건을 판정한다.
+   *
+   * evaluate()를 봉마다 부르면 지표를 매번 다시 계산해서 O(n²)가 된다.
+   * 백테스트는 봉 하나하나를 다 훑어야 하므로, 지표는 한 번만 만들고
+   * 판정만 인덱스별로 돌린다.
+   *
+   * @returns { keys, pass: [bool[]], passCount: number[], strict: boolean[] }
+   */
+  function evaluateSeries(bars, config) {
+    const conditions = (config && Array.isArray(config.conditions)) ? config.conditions : [];
+    const n = bars.length;
+    const cols = {
+      high: bars.map(b => b.high), low: bars.map(b => b.low),
+      close: bars.map(b => b.close), volume: bars.map(b => b.volume || 0),
+    };
+    const cache = new Map();
+    const seriesFor = (name, params) => {
+      const key = name + ':' + JSON.stringify(params || {});
+      if (cache.has(key)) return cache.get(key);
+      const fn = INDICATORS[name];
+      const s = fn ? fn(cols, params || {}) : null;
+      cache.set(key, s);
+      return s;
+    };
+
+    const keys = conditions.map(c => c.key);
+    const series = conditions.map(c => seriesFor(c.indicator, c.params));
+    const passCount = new Array(n).fill(0);
+    const strict = new Array(n).fill(false);
+    const perCond = {};
+    keys.forEach(k => { perCond[k] = new Array(n).fill(false); });
+
+    for (let i = 0; i < n; i++) {
+      let cnt = 0;
+      conditions.forEach((c, ci) => {
+        const s = series[ci];
+        const ok = s ? testCondition(s, i, c) : false;
+        perCond[c.key][i] = ok;
+        if (ok) cnt++;
+      });
+      passCount[i] = cnt;
+      strict[i] = keys.length > 0 && cnt === keys.length;
+    }
+    return { keys, perCond, passCount, strict, seriesFor };
+  }
+
   return {
     sma, ema, cci, macd, obv, obvRatio, williamsR, rsi, volumeRatioSeries,
-    INDICATORS, testCondition, evaluate, percentileRanks, trailingMean,
+    rollingHigh, rollingLow, closeVsMa, closeVsHigh, drawdownFromHigh, dayChange, atrPct,
+    INDICATORS, testCondition, evaluate, evaluateSeries, percentileRanks, trailingMean,
   };
 });
