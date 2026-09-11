@@ -44,15 +44,24 @@ app.use((req, res, next) => {
 // screener.html은 스크래핑 요청량이 훨씬 커서(수백 건) /stats와 같은 계정으로 막아둔다.
 // express.static보다 먼저 등록해야 이 라우트가 우선한다.
 app.get('/screener.html', checkStatsAuth, (req, res) => {
+  res.set('Cache-Control', 'no-store, must-revalidate');
   res.sendFile(path.join(__dirname, 'public', 'screener.html'));
 });
 
 // 모멘텀 스크리너는 종목당 일봉 120일치를 받아오므로 요청량이 더 크다 — 같은 계정으로 막는다.
 app.get('/momentum.html', checkStatsAuth, (req, res) => {
+  res.set('Cache-Control', 'no-store, must-revalidate');
   res.sendFile(path.join(__dirname, 'public', 'momentum.html'));
 });
 
-app.use(express.static('public'));
+// HTML은 캐시하지 않는다.
+// 고친 화면을 올렸는데 브라우저가 예전 파일을 계속 보여줘서 "왜 안 바뀌냐"로
+// 시간을 버린 적이 있다. js/css는 정상 캐시하되 html만 매번 새로 받게 한다.
+app.use(express.static('public', {
+  setHeaders(res, filePath) {
+    if (filePath.endsWith('.html')) res.set('Cache-Control', 'no-store, must-revalidate');
+  },
+}));
 
 /* ───────────────────────── 캐시 ───────────────────────── */
 const CACHE_MS = 5 * 60 * 1000;
@@ -2361,7 +2370,7 @@ app.get('/api/flow/:code', checkStatsAuth, async (req, res) => {
  * "고쳤는데 왜 그대로냐"의 원인이 대부분 "아직 예전 코드가 돌고 있다"였다.
  * BUILD를 올려두면 /api/health만 열어봐도 지금 무엇이 떠 있는지 바로 알 수 있다.
  */
-const BUILD = '2026-09-11e 모멘텀 후보에 적정주가 표시';
+const BUILD = '2026-09-11f 적정주가 표시 + HTML 캐시 차단';
 
 app.get('/api/health', (_, res) => res.json({
   ok: true,
