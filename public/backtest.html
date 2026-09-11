@@ -134,7 +134,30 @@
       </div>
     </div>
 
-    <p class="note" style="margin-top:14px"><b>매매 규칙</b> — 신호 다음 봉 시가에 사고, 아래 조건 중 먼저 닿는 쪽에 팝니다.</p>
+    <p class="note" style="margin-top:14px">
+      <b>진입</b> — 눌림을 0으로 두면 신호 다음 봉 시가에 바로 삽니다.
+      값을 넣으면 <b>신호일 종가 대비 그만큼 밀릴 때까지 기다렸다가</b> 그 가격에 삽니다.
+      기다리는 동안 안 밀리면 그 신호는 건너뜁니다.
+    </p>
+    <div class="grid">
+      <div class="f">
+        <label for="pullback">눌림 대기 (%)</label>
+        <input id="pullback" type="number" value="0" step="0.5" min="0" max="20">
+        <span class="hint">0 = 바로 매수 · 3이면 종가 −3%에 지정가</span>
+      </div>
+      <div class="f">
+        <label for="pullbackWait">최대 대기 (거래일)</label>
+        <input id="pullbackWait" type="number" value="3" step="1" min="1" max="10">
+        <span class="hint">이 안에 안 닿으면 진입 안 함</span>
+      </div>
+      <div class="f" style="grid-column:span 2">
+        <span class="hint" style="padding-top:22px;display:block">
+          진입 가격이 낮아지므로 손절폭도 같이 조일 수 있습니다. 대신 <b>진입률</b>이 떨어집니다 — 그 균형을 보세요.
+        </span>
+      </div>
+    </div>
+
+    <p class="note" style="margin-top:14px"><b>청산</b> — 아래 조건 중 먼저 닿는 쪽에 팝니다.</p>
     <div class="grid">
       <div class="f">
         <label for="target">목표 수익률 (%)</label>
@@ -197,7 +220,7 @@
   <div class="panel" style="overflow-x:auto">
     <table>
       <thead><tr>
-        <th>조건</th><th>건수</th><th>평균</th><th>승률</th><th>목표도달</th>
+        <th>조건</th><th>건수</th><th>진입률</th><th>평균</th><th>승률</th><th>목표도달</th>
         <th>검증구간 평균</th><th>검증 건수</th><th>벤치대비</th>
       </tr></thead>
       <tbody id="compareTable"></tbody>
@@ -225,6 +248,7 @@
         <li><b>목표 도달률</b>이 “5~10% 먹고 나오는 그림”에 해당합니다. 승률보다 이 숫자를 보십시오. 승률은 +0.1%도 승리로 세지만 그건 먹은 게 아닙니다.</li>
         <li><b>평균 최대상승폭(MFE)</b>이 목표치에 한참 못 미치면, 목표를 낮춰야 한다는 뜻입니다. 반대로 MFE가 목표보다 훨씬 크면 너무 일찍 팔고 있는 것입니다.</li>
         <li><b>평균 최대하락폭(MAE)</b>은 손절폭을 정하는 근거입니다. MAE가 -8%인데 손절을 5%에 두면 이길 거래도 손절로 끝납니다.</li>
+        <li><b>진입률</b>은 신호 중 실제로 살 수 있었던 비율입니다. 눌림을 깊게 기다릴수록 성적은 좋아지지만 진입률이 떨어집니다. 진입률이 20% 아래로 내려가면 실전에서는 거의 기회가 없다는 뜻입니다.</li>
         <li><b>건수 30 미만</b>은 통계가 아닙니다. 종목 수나 기간을 늘리십시오.</li>
         <li><b>검증 구간</b>에서 무너지면 버리십시오. 학습 구간 성적이 아무리 좋아도 의미 없습니다.</li>
       </ul>
@@ -283,7 +307,10 @@
       var f = FILTERS.filter(function(x){ return x.id===id; })[0];
       parts.push(f ? f.label.split(' (')[0] : id);
     });
-    return parts.length ? parts.join(' + ') : '(조건 없음)';
+    var name = parts.length ? parts.join(' + ') : '(조건 없음)';
+    var pb = Number($('pullback').value) || 0;
+    return name + ' [목표' + $('target').value + '/손절' + $('stop').value
+      + (pb > 0 ? '/눌림-' + pb : '/즉시') + ']';
   }
 
   $('btnRun').addEventListener('click', function(){
@@ -292,6 +319,7 @@
       krDays: $('krDays').value, range: $('range').value,
       target: $('target').value, stop: $('stop').value, hold: $('hold').value,
       base: $('useBase').checked ? '1' : '0',
+      pullback: $('pullback').value, pullbackWait: $('pullbackWait').value,
       filters: chosenFilters().join(','),
     });
     if($('splitDate').value) qs.set('splitDate', $('splitDate').value);
@@ -314,7 +342,8 @@
     var o = d.overall;
     status(d.dataFrom + ' ~ ' + d.dataTo + ' · ' + d.stocksUsed + '종목'
       + (d.stocksFailed ? '(실패 ' + d.stocksFailed + ')' : '')
-      + ' · 신호 ' + o.trades + '건'
+      + ' · 신호 ' + (d.signalTotal || o.trades) + '건'
+      + (d.missedEntries ? ' (진입 ' + o.trades + ' · 눌림 없어 건너뜀 ' + d.missedEntries + ')' : '')
       + ' · 검증구간 시작 ' + d.splitDate);
 
     $('resultSec').style.display = 'block';
@@ -350,6 +379,9 @@
       ['평균 최대하락(MAE)', pct(o.avgMaePct)],
       ['기간 다 채웠을 때', pct(o.avgBuyHoldPct)],
       ['아무 날 진입 평균', pct(o.benchmarkAvgPct)],
+      ['진입률', d.entryRatePct == null ? '—' : plain(d.entryRatePct)
+        + ' <span style="font-size:11px;color:#7B8896">(' + o.trades + '/' + d.signalTotal + ')</span>'],
+      ['평균 진입 지연', o.avgEntryDelayBars == null ? '—' : o.avgEntryDelayBars + '일'],
     ].map(function(x){
       return '<div class="kpi"><div class="k">' + x[0] + '</div><div class="v">' + x[1] + '</div></div>';
     }).join('');
@@ -389,11 +421,12 @@
       }).join('');
     }
 
-    comparisons.push({ label: label, o: o, test: d.test });
+    comparisons.push({ label: label, o: o, test: d.test, entryRate: d.entryRatePct });
     $('compareSec').style.display = 'block';
     $('compareTable').innerHTML = comparisons.map(function(c){
       var t = c.test || {};
       return '<tr><td>' + esc(c.label) + '</td><td>' + c.o.trades + '</td>'
+        + '<td>' + (c.entryRate == null ? '—' : plain(c.entryRate)) + '</td>'
         + '<td class="' + cls(c.o.avgReturnPct) + '">' + pct(c.o.avgReturnPct) + '</td>'
         + '<td>' + plain(c.o.winRatePct) + '</td><td>' + plain(c.o.targetHitRatePct) + '</td>'
         + '<td class="' + cls(t.avgReturnPct) + '">' + pct(t.avgReturnPct) + '</td>'
@@ -402,7 +435,7 @@
     }).join('');
   }
 
-  var PAGE_VERSION = '2026-09-12b';
+  var PAGE_VERSION = '2026-09-12c';
   fetch('/api/health').then(function(r){ return r.json(); }).then(function(j){
     var same = j.build && j.build.indexOf(PAGE_VERSION) === 0;
     $('buildInfo').innerHTML = '화면 ' + PAGE_VERSION + ' · 서버 ' + esc(j.build || '(표시 없음)')
