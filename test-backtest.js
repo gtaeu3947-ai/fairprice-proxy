@@ -209,5 +209,60 @@ console.log('\n[13] 신호가 없으면 빈 결과를 낸다');
   check('요약이 터지지 않는다', BT.summarize([], []).trades === 0);
 }
 
+
+console.log('\n[14] 눌림목 진입');
+{
+  // 신호일 종가 100. 다음날 저가 96까지 밀린 뒤 반등하는 모양.
+  const closes = Array(20).fill(100);
+  const bars = mkBars(closes, {
+    open: () => 100,
+    high: () => 101,
+    low: (i) => (i % 2 === 1 ? 96 : 99.5),
+  });
+  const t = BT.simulateOne(bars, ALWAYS, { ...OPT, warmupBars: 4, pullbackPct: 3, pullbackWaitBars: 3 })[0];
+  check('지정가(97)에 체결', Math.abs(t.entry - 97) < 0.01, t);
+  check('시가(100)가 아니다', t.entry !== 100, t);
+  check('진입이 며칠 지연됐는지 기록', t.entryOffset >= 1, t);
+}
+
+console.log('\n[15] 눌림을 안 주면 진입하지 않는다');
+{
+  // 계속 오르기만 해서 -3%를 한 번도 안 찍는 경우
+  const bars = mkBars(Array(20).fill(0).map((v, i) => 100 + i * 2), {
+    low: (i, c) => c * 0.995,
+  });
+  const trades = BT.simulateOne(bars, ALWAYS, { ...OPT, warmupBars: 4, pullbackPct: 3, pullbackWaitBars: 3 });
+  check('매매 0건', trades.length === 0, trades.length);
+  check('못 산 신호 수가 기록됨', trades.missedEntries > 0, trades.missedEntries);
+}
+
+console.log('\n[16] 시가가 지정가보다 낮게 열리면 그 시가에 산다');
+{
+  const bars = mkBars(Array(20).fill(100), {
+    open: (i) => (i % 2 === 1 ? 94 : 100),
+    high: () => 101,
+    low: (i) => (i % 2 === 1 ? 93 : 99.5),
+  });
+  const t = BT.simulateOne(bars, ALWAYS, { ...OPT, warmupBars: 4, pullbackPct: 3, pullbackWaitBars: 3 })[0];
+  check('지정가 97이 아니라 시가 94에 체결', Math.abs(t.entry - 94) < 0.01, t);
+}
+
+console.log('\n[17] 진입률이 집계에 나온다');
+{
+  const perStock = [{
+    code: 'A', name: '가',
+    trades: Object.assign([
+      { date: '2026-01-05', returnPct: 6, buyHoldPct: 6, exitReason: 'target', exitBars: 2, mfePct: 7, maePct: -1, passCount: 3, entryOffset: 2 },
+      { date: '2026-01-06', returnPct: -3, buyHoldPct: -3, exitReason: 'stop', exitBars: 1, mfePct: 0, maePct: -4, passCount: 3, entryOffset: 1 },
+    ], { missedEntries: 6 }),
+    benchmark: [1, 1],
+  }];
+  const agg = BT.aggregate(perStock, { splitDate: '2026-06-01', holdDays: 5 });
+  check('신호 총 8건', agg.signalTotal === 8, agg);
+  check('못 산 신호 6건', agg.missedEntries === 6, agg);
+  check('진입률 25%', agg.entryRatePct === 25, agg.entryRatePct);
+  check('평균 진입 지연이 계산됨', agg.overall.avgEntryDelayBars === 1.5, agg.overall);
+}
+
 console.log('\n' + (fail ? fail + '개 실패' : '전부 통과'));
 process.exit(fail ? 1 : 0);

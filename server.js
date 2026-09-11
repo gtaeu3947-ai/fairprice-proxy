@@ -2176,7 +2176,11 @@ async function runBacktest(opt) {
     rules: {
       holdDays: opt.holdDays, targetPct: opt.targetPct, stopPct: opt.stopPct,
       minPassCount: Math.min(opt.minPassCount, config.conditions.length),
-      entry: '신호 다음 봉 시가', exitPriority: '같은 날 목표·손절 동시 도달 시 손절로 계산',
+      entry: opt.pullbackPct > 0
+        ? `신호일 종가 대비 -${opt.pullbackPct}% 지정가, ${opt.pullbackWaitBars}봉 안에 안 닿으면 진입 안 함`
+        : '신호 다음 봉 시가',
+      pullbackPct: opt.pullbackPct, pullbackWaitBars: opt.pullbackWaitBars,
+      exitPriority: '같은 날 목표·손절 동시 도달 시 손절로 계산',
     },
     ...agg,
   };
@@ -2210,6 +2214,9 @@ app.get('/api/backtest', checkStatsAuth, async (req, res) => {
     stopPct: Math.max(0.5, num(req.query.stop, 5)),
     minPassCount: Math.max(1, Math.round(num(req.query.minPass, 99))),   // 기본은 전부 충족
     warmupBars: Math.min(200, Math.max(60, Math.round(num(req.query.warmup, 80)))),
+    // 눌림목 진입: 0이면 예전처럼 다음 봉 시가에 바로 산다.
+    pullbackPct: Math.max(0, num(req.query.pullback, 0)),
+    pullbackWaitBars: Math.min(10, Math.max(1, Math.round(num(req.query.pullbackWait, 3)))),
     splitDate: String(req.query.splitDate || '').match(/^\d{4}-\d{2}-\d{2}$/) ? req.query.splitDate : null,
     krCalendarDays: krDays,
     yahooRange: ['1y', '2y', '5y', '10y'].includes(req.query.range) ? req.query.range : '5y',
@@ -2868,7 +2875,7 @@ app.get('/api/flow/:code', checkStatsAuth, async (req, res) => {
  * "고쳤는데 왜 그대로냐"의 원인이 대부분 "아직 예전 코드가 돌고 있다"였다.
  * BUILD를 올려두면 /api/health만 열어봐도 지금 무엇이 떠 있는지 바로 알 수 있다.
  */
-const BUILD = '2026-09-12b 백테스트 도구 추가';
+const BUILD = '2026-09-12c 눌림목 진입 백테스트';
 
 app.get('/api/health', (_, res) => res.json({
   ok: true,

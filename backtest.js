@@ -51,12 +51,39 @@ function simulateOne(bars, config, opt) {
   const ev = MC.evaluateSeries(bars, config);
   const trades = [];
 
+  // 눌림목 진입: 신호 다음 봉 시가에 바로 사지 않고, 신호일 종가 대비 -pullbackPct를
+  // 터치할 때까지 기다렸다가 그 가격에 산다. 기다리는 동안 안 밀리면 진입하지 않는다.
+  // (실제 매매는 30분봉 일목 기준선까지 눌림을 기다렸다 사는 방식인데, 일봉으로는
+  //  그 선을 그릴 수 없으므로 "종가 대비 몇 % 밀림"으로 근사한다.)
+  const pullbackPct = opt.pullbackPct || 0;
+  const pullbackWait = Math.max(1, opt.pullbackWaitBars || 3);
+  let missedEntries = 0;   // 눌림을 안 줘서 못 산 신호 수
+
   // 진입은 i+1봉 시가, 청산은 최대 i+hold봉. 그래서 i는 끝에서 hold만큼 남겨둔다.
-  for (let i = warmup; i < bars.length - hold - 1; i++) {
+  const tailRoom = hold + 1 + (pullbackPct > 0 ? pullbackWait : 0);
+  for (let i = warmup; i < bars.length - tailRoom; i++) {
     if (condCount === 0 || ev.passCount[i] < minPass) continue;
 
-    const entryBar = bars[i + 1];
-    const entry = entryBar.open;
+    let entryBar, entry, entryOffset;
+    if (pullbackPct > 0) {
+      // 신호일 종가에서 목표 눌림가를 잡고, 이후 pullbackWait봉 안에 저가가 닿는지 본다.
+      const limit = bars[i].close * (1 - pullbackPct / 100);
+      let found = -1;
+      for (let k = 1; k <= pullbackWait; k++) {
+        const b = bars[i + k];
+        if (!b) break;
+        if (b.low <= limit) { found = k; break; }
+      }
+      if (found < 0) { missedEntries++; continue; }
+      entryOffset = found;
+      entryBar = bars[i + found];
+      // 시가가 이미 지정가보다 낮게 열렸으면 그 시가에 체결된다.
+      entry = Math.min(limit, entryBar.open);
+    } else {
+      entryOffset = 1;
+      entryBar = bars[i + 1];
+      entry = entryBar.open;
+    }
     if (!(entry > 0)) continue;
 
     const target = entry * (1 + opt.targetPct / 100);
@@ -66,7 +93,7 @@ function simulateOne(bars, config, opt) {
     let mfe = 0, mae = 0;   // 보유 중 최대 상승폭 / 최대 하락폭 (%)
 
     for (let k = 0; k < hold; k++) {
-      const b = bars[i + 1 + k];
+      const b = bars[i + entryOffset + k];
       if (!b) break;
       mfe = Math.max(mfe, (b.high / entry - 1) * 100);
       mae = Math.min(mae, (b.low / entry - 1) * 100);
@@ -85,13 +112,15 @@ function simulateOne(bars, config, opt) {
       entry: r2(entry),
       exit: r2(exit),
       returnPct: r2((exit / entry - 1) * 100),
-      buyHoldPct: r2((bars[i + hold].close / entry - 1) * 100),
+      buyHoldPct: r2(((bars[i + entryOffset + hold - 1] || bars[bars.length - 1]).close / entry - 1) * 100),
+      entryOffset,
       exitReason, exitBars,
       mfePct: r2(mfe), maePct: r2(mae),
       passCount: ev.passCount[i],
       strict: ev.strict[i],
     });
   }
+  trades.missedEntries = missedEntries;
   return trades;
 }
 
@@ -135,6 +164,7 @@ function summarize(trades, benchmark) {
     stopHitRatePct: r2((stop / trades.length) * 100),
     timeoutRatePct: r2(((trades.length - target - stop) / trades.length) * 100),
     avgHoldBars: r2(mean(trades.map(t => t.exitBars))),
+    avgEntryDelayBars: r2(mean(trades.map(t => t.entryOffset).filter(v => v != null))),
     // 목표·손절 없이 기간을 다 채웠다면
     avgBuyHoldPct: r2(mean(bh)),
     // 보유 중 최대 상승·하락폭 — "5~10% 먹을 자리가 있었나"를 본다
@@ -165,9 +195,11 @@ function splitByDate(trades, splitDate) {
 function aggregate(perStock, opt) {
   const allTrades = [];
   const allBench = [];
+  let missedEntries = 0;
   perStock.forEach(s => {
     s.trades.forEach(t => allTrades.push({ ...t, code: s.code, name: s.name }));
     (s.benchmark || []).forEach(v => allBench.push(v));
+    missedEntries += (s.trades.missedEntries || 0);
   });
   allTrades.sort((a, b) => a.date.localeCompare(b.date));
 
@@ -208,6 +240,11 @@ function aggregate(perStock, opt) {
     bestStocks: byStock.slice(0, 8),
     worstStocks: byStock.slice(-8).reverse(),
     sampleTrades: allTrades.slice(-25).reverse(),
+    // 눌림을 안 줘서 못 산 신호 수. "자주는 안 걸린다"가 여기서 숫자로 나온다.
+    missedEntries,
+    signalTotal: allTrades.length + missedEntries,
+    entryRatePct: (allTrades.length + missedEntries) > 0
+      ? r2((allTrades.length / (allTrades.length + missedEntries)) * 100) : null,
     firstTradeDate: allTrades.length ? allTrades[0].date : null,
     lastTradeDate: allTrades.length ? allTrades[allTrades.length - 1].date : null,
   };
