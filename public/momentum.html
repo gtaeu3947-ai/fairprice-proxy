@@ -177,6 +177,18 @@
         </select>
       </div>
       <div class="f">
+        <label for="regime">시장 국면 <span class="hint">— 적정주가 계산용</span></label>
+        <select id="regime">
+          <option value="up" selected>상승장</option>
+          <option value="flat">횡보장</option>
+          <option value="down">하락장</option>
+        </select>
+      </div>
+      <div class="f">
+        <label for="kbase">기준 요구수익률 (%)</label>
+        <input id="kbase" type="number" value="4.64" step="0.01">
+      </div>
+      <div class="f">
         <label for="minTurnover">최소 평균거래대금 (억원)</label>
         <input id="minTurnover" type="number" value="30" step="10" min="0">
         <span class="hint">20일 평균. 유니버스를 넓혔다면 이 값도 낮춰야 소형주가 남습니다</span>
@@ -308,6 +320,8 @@
         <li>업종 강도 = 구성종목 <b>5일 수익률 평균의 백분위 × 0.7 + 20일 수익률 평균의 백분위 × 0.3</b>. 단기 돌파를 찾는 스크리너라 최근 5일에 더 비중을 뒀습니다.</li>
         <li>유니버스 안에 구성종목이 3개 미만인 업종은 표본이 작아 순위에서 빼고 중립(0.5)으로 둡니다.</li>
         <li>시장 국면은 지수를 따로 받지 않고 <b>유니버스 종목 중 20일선 위에 있는 비율</b>로 읽습니다. 65% 이상이면 강세, 45~65%면 중립, 45% 미만이면 약세입니다.</li>
+        <li><b>적정주가는 최종 후보에만 계산합니다.</b> 재무 조회는 종목당 요청이 여러 건이라 유니버스 전체에 돌리면 스캔이 몇 배 느려집니다. 순위가 정해진 뒤 상위 종목에만 얹습니다. 계산식은 <a href="index.html">적정주가 계산기</a>와 같고, 위 “시장 국면”과 “기준 요구수익률”을 씁니다.</li>
+        <li><b>괴리율은 이 화면의 종가 기준</b>입니다. 음수면 적정주가보다 싸다는 뜻입니다. 자기자본을 BPS로 추정한 종목은 카드에 그 사실을 표시합니다 — 정확한 값이 필요하면 계산기에서 직접 확인하십시오.</li>
         <li><b>조건식은 저장소 코드에 없습니다.</b> 서버 환경변수 <code>MOMENTUM_CONDITIONS</code>(또는 gitignore된 <code>conditions.local.json</code>)에서만 읽으므로, GitHub 저장소가 공개돼 있어도 조건 내용은 노출되지 않습니다. 화면에서도 상단 “보이기”를 눌러야 펼쳐집니다.</li>
         <li><b>뉴스나 국제 정세를 서버가 직접 읽지는 않습니다.</b> 정세에 대한 판단은 “테마 키워드” 칸에 직접 넣으시면 그 단어가 업종명·종목명에 걸릴 때 가점으로 반영됩니다.</li>
       </ul>
@@ -330,6 +344,7 @@
 
 <footer>
   이 페이지는 계산 도구입니다. 투자 판단과 그 결과는 이용자 본인의 몫이며, 어떤 종목의 매수·매도 권유도 아닙니다.
+  <div id="buildInfo" style="margin-top:6px"></div>
 </footer>
 
 </div>
@@ -419,6 +434,7 @@
       n: $('n').value, market: $('market').value, barsAgo: $('barsAgo').value,
       minTurnover: $('minTurnover').value, minPass: $('minPass').value,
       keywords: $('keywords').value,
+      regime: $('regime').value, kbase: $('kbase').value,
       weightCond: $('weightCond').value, weightSector: $('weightSector').value,
       weightVolume: $('weightVolume').value, weightKeyword: $('weightKeyword').value,
     });
@@ -508,6 +524,14 @@
         + '</div>'
         + '<div class="badges">' + badges + '</div>'
         + '<div class="metric"><span>종가</span><span>' + fmtWon(c.close) + '</span></div>'
+        + (c.fairPrice != null
+            ? '<div class="metric"><span>적정주가</span><span>' + fmtWon(c.fairPrice) + '</span></div>'
+              + '<div class="metric"><span>괴리율</span><span class="' + (c.gapPct <= 0 ? 'gain-t' : 'loss-t') + '">'
+              + fmtPct(c.gapPct) + (c.gapPct <= 0 ? ' (저평가)' : ' (고평가)') + '</span></div>'
+            : '<div class="metric"><span>적정주가</span><span style="color:#7B8896">' + esc(c.fairNote || '—') + '</span></div>')
+        + (c.fairPrice != null && c.fairNote
+            ? '<div class="metric"><span style="color:#A97614;font-size:12px">' + esc(c.fairNote) + '</span><span></span></div>'
+            : '')
         + valueRows
         + '<div class="metric"><span>거래량비율</span><span>' + (c.volumeRatio==null?'—':c.volumeRatio.toFixed(2)+'배') + '</span></div>'
         + '<div class="metric"><span>5일 / 20일</span><span class="' + (c.ret5>=0?'gain-t':'loss-t') + '">'
@@ -610,6 +634,15 @@
       $('perfStatus').textContent = '조회 실패 — ' + e.message;
     });
   });
+
+  /* 화면 파일과 서버가 같은 판인지 한눈에 보이게 한다.
+     둘이 다르면 배포가 반만 됐거나 브라우저가 예전 HTML을 들고 있는 것이다. */
+  var PAGE_VERSION = '2026-09-11f';
+  fetch('/api/health').then(function(r){ return r.json(); }).then(function(j){
+    var same = j.build && j.build.indexOf(PAGE_VERSION) === 0;
+    $('buildInfo').innerHTML = '화면 ' + PAGE_VERSION + ' · 서버 ' + esc(j.build || '(표시 없음)')
+      + (same ? '' : ' <b style="color:#B4451C">— 화면과 서버 판이 다릅니다. 새로고침하거나 배포를 확인하세요.</b>');
+  }).catch(function(){});
 
   loadConditions();
   refreshRecoDates(null);

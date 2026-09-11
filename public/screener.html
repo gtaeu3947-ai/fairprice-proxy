@@ -289,7 +289,8 @@
 
 <footer>
   이 페이지는 계산 도구입니다. 투자 판단과 그 결과는 이용자 본인의 몫이며, 어떤 종목의 매수·매도 권유도 아닙니다.
-</footer>
+
+  <div id="buildInfo" style="margin-top:6px"></div></footer>
 
 </div>
 
@@ -496,6 +497,14 @@
   }
 
   refreshRecoDates();
+  var PAGE_VERSION = '2026-09-11f';
+  fetch('/api/health').then(function(r){ return r.json(); }).then(function(j){
+    var same = j.build && j.build.indexOf(PAGE_VERSION) === 0;
+    var el = document.getElementById('buildInfo');
+    if(!el) return;
+    el.innerHTML = '화면 ' + PAGE_VERSION + ' · 서버 ' + (j.build || '(표시 없음)')
+      + (same ? '' : ' <b style="color:#B4451C">— 화면과 서버 판이 다릅니다. 새로고침하거나 배포를 확인하세요.</b>');
+  }).catch(function(){});
 })();
 </script>
 </body>
