@@ -157,6 +157,33 @@
       </div>
     </div>
 
+    <p class="note" style="margin-top:14px">
+      <b>분할매수</b> — 0이면 1회 매수. 값을 넣으면 1차 진입가에서 그만큼 더 빠질 때
+      나머지를 사고, <b>목표와 손절을 새 평단 기준으로 다시 잡습니다</b>.
+      손절폭은 이 값보다 넉넉해야 추가매수 전에 잘려나가지 않습니다.
+    </p>
+    <div class="grid">
+      <div class="f">
+        <label for="addOn">추가매수 지점 (%)</label>
+        <input id="addOn" type="number" value="0" step="1" min="0" max="40">
+        <span class="hint">0 = 안 함 · 14면 진입가 −14%</span>
+      </div>
+      <div class="f">
+        <label for="firstWeight">1차 비중</label>
+        <select id="firstWeight">
+          <option value="0.5" selected>절반씩 (5:5)</option>
+          <option value="0.3">3:7 (아래에 더 많이)</option>
+          <option value="0.7">7:3 (위에 더 많이)</option>
+        </select>
+      </div>
+      <div class="f" style="grid-column:span 2">
+        <span class="hint" style="padding-top:22px;display:block">
+          수익률은 <b>실제 투입 자금 기준</b>입니다. 추가매수를 안 한 거래는 절반만 넣은 것으로 계산하므로,
+          1회 매수와 같은 잣대로 비교됩니다.
+        </span>
+      </div>
+    </div>
+
     <p class="note" style="margin-top:14px"><b>청산</b> — 아래 조건 중 먼저 닿는 쪽에 팝니다.</p>
     <div class="grid">
       <div class="f">
@@ -200,6 +227,14 @@
     <div class="verdict" id="verdict"></div>
     <div class="kpis" id="kpis"></div>
     <p class="note" id="edgeNote"></p>
+    <div id="addOnBox" style="display:none;margin-top:14px;padding:12px 14px;background:#FBF7EE;border:1px solid #E8DCC2;border-radius:10px;font-size:13.5px">
+      <b>분할매수 결과</b>
+      <table style="margin-top:8px">
+        <thead><tr><th>구분</th><th>비율</th><th>평균</th></tr></thead>
+        <tbody id="addOnTable"></tbody>
+      </table>
+      <p class="note" id="addOnNote" style="margin-top:8px"></p>
+    </div>
 
     <p class="note" style="margin-top:16px"><b>구간별</b> — 검증 구간은 조건을 고를 때 쓰지 않은 기간입니다.</p>
     <table>
@@ -233,7 +268,7 @@
   <div class="stitle"><h2>최근 매매</h2><span>계산이 맞는지 눈으로 확인</span></div>
   <div class="panel" style="overflow-x:auto">
     <table>
-      <thead><tr><th>신호일</th><th>종목</th><th>진입</th><th>청산</th><th>결과</th><th>사유</th><th>보유</th><th>최대상승</th><th>최대하락</th></tr></thead>
+      <thead><tr><th>신호일</th><th>종목</th><th>진입</th><th>평단</th><th>청산</th><th>결과</th><th>사유</th><th>보유</th><th>최대하락</th></tr></thead>
       <tbody id="tradeTable"></tbody>
     </table>
   </div>
@@ -248,6 +283,7 @@
         <li><b>목표 도달률</b>이 “5~10% 먹고 나오는 그림”에 해당합니다. 승률보다 이 숫자를 보십시오. 승률은 +0.1%도 승리로 세지만 그건 먹은 게 아닙니다.</li>
         <li><b>평균 최대상승폭(MFE)</b>이 목표치에 한참 못 미치면, 목표를 낮춰야 한다는 뜻입니다. 반대로 MFE가 목표보다 훨씬 크면 너무 일찍 팔고 있는 것입니다.</li>
         <li><b>평균 최대하락폭(MAE)</b>은 손절폭을 정하는 근거입니다. MAE가 -8%인데 손절을 5%에 두면 이길 거래도 손절로 끝납니다.</li>
+        <li><b>분할매수를 볼 때는 평균을 믿지 마십시오.</b> 손실을 확정하지 않고 미루면 상승장에서는 대부분 회복되므로 백테스트가 거의 항상 좋게 평가합니다. 진짜 위험은 “물타고도 못 살아난” 소수 거래에 있습니다. 그 비율, 최악의 거래, 하위 10% 값을 보십시오.</li>
         <li><b>진입률</b>은 신호 중 실제로 살 수 있었던 비율입니다. 눌림을 깊게 기다릴수록 성적은 좋아지지만 진입률이 떨어집니다. 진입률이 20% 아래로 내려가면 실전에서는 거의 기회가 없다는 뜻입니다.</li>
         <li><b>건수 30 미만</b>은 통계가 아닙니다. 종목 수나 기간을 늘리십시오.</li>
         <li><b>검증 구간</b>에서 무너지면 버리십시오. 학습 구간 성적이 아무리 좋아도 의미 없습니다.</li>
@@ -310,7 +346,8 @@
     var name = parts.length ? parts.join(' + ') : '(조건 없음)';
     var pb = Number($('pullback').value) || 0;
     return name + ' [목표' + $('target').value + '/손절' + $('stop').value
-      + (pb > 0 ? '/눌림-' + pb : '/즉시') + ']';
+      + (pb > 0 ? '/눌림-' + pb : '/즉시')
+      + ((Number($('addOn').value) || 0) > 0 ? '/물타기-' + $('addOn').value : '') + ']';
   }
 
   $('btnRun').addEventListener('click', function(){
@@ -320,6 +357,7 @@
       target: $('target').value, stop: $('stop').value, hold: $('hold').value,
       base: $('useBase').checked ? '1' : '0',
       pullback: $('pullback').value, pullbackWait: $('pullbackWait').value,
+      addOn: $('addOn').value, firstWeight: $('firstWeight').value,
       filters: chosenFilters().join(','),
     });
     if($('splitDate').value) qs.set('splitDate', $('splitDate').value);
@@ -375,6 +413,9 @@
       ['목표 도달률', plain(o.targetHitRatePct)],
       ['손절률', plain(o.stopHitRatePct)],
       ['승률', plain(o.winRatePct)],
+      ['최악의 거래', pct(o.worstTradePct)],
+      ['하위 10%', pct(o.p10ReturnPct)],
+      ['−10% 넘게 잃은 비율', plain(o.lossOver10Pct)],
       ['평균 최대상승(MFE)', pct(o.avgMfePct)],
       ['평균 최대하락(MAE)', pct(o.avgMaePct)],
       ['기간 다 채웠을 때', pct(o.avgBuyHoldPct)],
@@ -393,6 +434,22 @@
     if(o.avgMaePct != null && Math.abs(o.avgMaePct) > Number($('stop').value))
       notes.push('평균 최대하락폭이 손절폭보다 큽니다 — 이길 거래도 손절로 끝나고 있을 수 있습니다.');
     $('edgeNote').innerHTML = notes.join(' ');
+
+    if(o.addedRatePct != null && o.addedRatePct > 0){
+      $('addOnBox').style.display = 'block';
+      $('addOnTable').innerHTML =
+        '<tr><td>추가매수까지 간 거래</td><td>' + plain(o.addedRatePct) + '</td>'
+        + '<td class="' + cls(o.addedAvgReturnPct) + '">' + pct(o.addedAvgReturnPct) + '</td></tr>'
+        + '<tr><td>1차만 들어간 거래</td><td>' + plain(100 - o.addedRatePct) + '</td>'
+        + '<td class="' + cls(o.noAddAvgReturnPct) + '">' + pct(o.noAddAvgReturnPct) + '</td></tr>'
+        + '<tr><td>추가매수 후 끝내 손실</td><td class="loss-t">' + plain(o.addedLostRatePct) + '</td><td>—</td></tr>';
+      $('addOnNote').innerHTML = '평균 투입 비중 ' + (o.avgInvestedWeight == null ? '—' : o.avgInvestedWeight)
+        + ' · <b>이 표에서 볼 것은 맨 아랫줄입니다.</b> 물타기의 위험은 평균이 아니라 '
+        + '“물타고도 못 살아난” 거래에 몰려 있습니다. 그 비율과 위의 최악의 거래를 함께 보십시오. '
+        + '상승장 표본에서는 이 숫자가 실제보다 낮게 나옵니다.';
+    } else {
+      $('addOnBox').style.display = 'none';
+    }
 
     var rows = [['전체', o], ['학습 구간', d.train], ['검증 구간', d.test]];
     $('splitTable').innerHTML = rows.map(function(r){
@@ -414,10 +471,12 @@
       $('tradesSec').style.display = 'block';
       $('tradeTable').innerHTML = d.sampleTrades.map(function(t){
         return '<tr><td>' + t.date + '</td><td>' + esc(t.name || t.code) + '</td>'
-          + '<td>' + t.entry + '</td><td>' + t.exit + '</td>'
+          + '<td>' + t.entry + '</td>'
+          + '<td>' + (t.addedAt != null ? t.avgPrice + ' <span style="color:#A97614">물</span>' : '—') + '</td>'
+          + '<td>' + t.exit + '</td>'
           + '<td class="' + cls(t.returnPct) + '">' + pct(t.returnPct) + '</td>'
           + '<td>' + ({target:'목표', stop:'손절', timeout:'만료'}[t.exitReason] || t.exitReason) + '</td>'
-          + '<td>' + t.exitBars + '일</td><td>' + pct(t.mfePct) + '</td><td>' + pct(t.maePct) + '</td></tr>';
+          + '<td>' + t.exitBars + '일</td><td>' + pct(t.maePct) + '</td></tr>';
       }).join('');
     }
 
@@ -435,7 +494,7 @@
     }).join('');
   }
 
-  var PAGE_VERSION = '2026-09-12c';
+  var PAGE_VERSION = '2026-09-12d';
   fetch('/api/health').then(function(r){ return r.json(); }).then(function(j){
     var same = j.build && j.build.indexOf(PAGE_VERSION) === 0;
     $('buildInfo').innerHTML = '화면 ' + PAGE_VERSION + ' · 서버 ' + esc(j.build || '(표시 없음)')
