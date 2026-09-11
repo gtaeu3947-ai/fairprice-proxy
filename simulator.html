@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>물타기·불타기 시뮬레이터</title>
+<meta name="description" content="종목의 실제 과거 시세로 물타기(하락 시 추가매수)와 불타기(상승 시 추가매수) 전략의 수익률을 계산합니다.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="물타기·불타기 시뮬레이터">
+<meta property="og:description" content="하락·상승 트리거와 추가매수 규칙을 정하면, 실제 과거 시세로 그 전략의 수익률을 계산해 한 번에 매수했을 때와 비교합니다.">
+<meta property="og:locale" content="ko_KR">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#16202C">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20rx='14'%20fill='%2316202C'/%3E%3Crect%20x='14'%20y='34'%20width='8'%20height='18'%20rx='2'%20fill='%23C8342B'/%3E%3Crect%20x='28'%20y='22'%20width='8'%20height='30'%20rx='2'%20fill='%23A97614'/%3E%3Crect%20x='42'%20y='14'%20width='8'%20height='38'%20rx='2'%20fill='%231F5FBF'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<style>
+  :root{
+    --ink:#16202C; --ink-2:#4A5966; --ink-3:#7B8896;
+    --paper:#EDF0F4; --panel:#FFFFFF; --line:#D6DDE5; --line-2:#E9EEF3;
+    --down:#C8342B; --up:#1F5FBF; --first:#3C4B5A;
+    --gain:#12704C; --loss:#B4451C;
+    --r:10px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--paper); color:var(--ink);
+    font-family:"Pretendard Variable",Pretendard,-apple-system,"Apple SD Gothic Neo","Malgun Gothic","맑은 고딕",sans-serif;
+    font-size:15px; line-height:1.55;
+    font-feature-settings:"tnum" 1;
+    -webkit-text-size-adjust:100%;
+  }
+  .wrap{max-width:1060px;margin:0 auto;padding:16px 16px 72px}
+  h1,h2,h3{margin:0;font-weight:700;letter-spacing:-0.02em}
+  a{color:var(--up)}
+
+  nav{font-size:13px}
+  nav a{color:var(--ink-2);text-decoration:none}
+  nav a:hover{text-decoration:underline}
+
+  header{padding:8px 0 20px;border-bottom:2px solid var(--ink)}
+  h1{font-size:24px;line-height:1.2;margin-top:8px}
+  .sub{color:var(--ink-2);font-size:13.5px;margin-top:6px}
+
+  section{margin-top:24px}
+  .stitle{display:flex;align-items:baseline;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+  .stitle h2{font-size:17px}
+  .stitle span{font-size:13px;color:var(--ink-3)}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+
+  .fetchbar{display:flex;gap:8px}
+  .fetchbar input{flex:1;min-width:0}
+  .picker{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .picker:empty{display:none}
+  .picker button{
+    font:inherit;font-size:13.5px;cursor:pointer;background:#F1F4F8;color:var(--ink);
+    border:1px solid var(--line);border-radius:20px;padding:6px 13px;
+  }
+  .fstatus{font-size:12.5px;color:var(--ink-3);margin:9px 0 0}
+  .fstatus.err{color:var(--loss)}
+  .fstatus.busy{color:var(--up)}
+
+  .presets{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0}
+  .presets button{
+    font:inherit;font-size:13px;cursor:pointer;background:#F1F4F8;color:var(--ink);
+    border:1px solid var(--line);border-radius:8px;padding:7px 12px;
+  }
+  .presets button[aria-pressed="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
+
+  .grid{display:grid;gap:12px 14px;grid-template-columns:repeat(4,1fr)}
+  .grid2{display:grid;gap:12px 14px;grid-template-columns:repeat(2,1fr)}
+  .f{display:flex;flex-direction:column;gap:5px;min-width:0}
+  .f label{font-size:12.5px;color:var(--ink-2);font-weight:600}
+  input,select{
+    font:inherit;font-size:15px;color:var(--ink);background:#FBFCFD;
+    border:1px solid var(--line);border-radius:7px;padding:9px 10px;width:100%;
+    font-feature-settings:"tnum" 1;
+  }
+  input:focus,select:focus,button:focus-visible{outline:2.5px solid var(--up);outline-offset:1px}
+
+  .strategy{border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-top:12px}
+  .strategy.down{border-top:4px solid var(--down)}
+  .strategy.up{border-top:4px solid var(--up)}
+  .stitle2{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  .stitle2 h3{font-size:15px}
+  .toggle{position:relative;display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13.5px;color:var(--ink-2)}
+  .toggle input{width:auto;padding:0}
+
+  .radiorow{display:flex;gap:16px;flex-wrap:wrap;margin-top:6px}
+  .radiorow label{display:flex;align-items:center;gap:6px;font-size:13.5px;color:var(--ink-2);cursor:pointer}
+  .radiorow input{width:auto}
+
+  button.act{
+    font:inherit;font-weight:700;font-size:15px;cursor:pointer;background:var(--ink);color:#fff;
+    border:none;border-radius:8px;padding:12px 18px;
+  }
+  button.ghost{background:var(--panel);color:var(--ink);border:1px solid var(--line);font-weight:600;font-size:14px;padding:10px 16px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:14px}
+
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:13px}
+  .card b{display:block;font-size:12px;color:var(--ink-3);font-weight:600;margin-bottom:6px}
+  .card span{font-size:22px;font-weight:800;letter-spacing:-0.02em}
+  .gain-t{color:var(--gain)} .loss-t{color:var(--loss)}
+
+  .verdict{border-radius:var(--r);padding:16px;color:#fff;background:var(--ink);margin-top:12px}
+  .verdict .tag{font-size:12.5px;opacity:.85;font-weight:700}
+  .verdict .big{font-size:28px;font-weight:800;letter-spacing:-0.02em;margin:4px 0 2px}
+  .verdict .line{font-size:14px;opacity:.92}
+
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{padding:8px 10px;text-align:right;border-bottom:1px solid var(--line-2)}
+  th{font-size:12px;color:var(--ink-2);font-weight:600;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  tbody tr:last-child td{border-bottom:none}
+  .kind-초기매수{color:var(--first);font-weight:700}
+  .kind-물타기{color:var(--down);font-weight:700}
+  .kind-불타기{color:var(--up);font-weight:700}
+
+  .note{font-size:13px;color:var(--ink-2);margin-top:10px}
+  .warnbox{margin-top:12px;padding:11px 13px;border-radius:var(--r);background:#FDF1EC;border:1px solid #F0C9B8;color:#7A2E10;font-size:13.5px}
+  .warnbox:empty{display:none}
+  .empty{color:var(--ink-3);font-size:13.5px;padding:20px 4px;text-align:center}
+
+  details{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:0 14px}
+  summary{cursor:pointer;padding:13px 0;font-weight:600;font-size:14.5px}
+  details[open] summary{border-bottom:1px solid var(--line-2)}
+  .dbody{padding:12px 0 14px;font-size:13.5px;color:var(--ink-2)}
+  .dbody ul{margin:8px 0;padding-left:18px} .dbody li{margin:4px 0}
+
+  footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink-3)}
+
+  @media (max-width:820px){
+    .grid{grid-template-columns:repeat(2,1fr)}
+    .grid2{grid-template-columns:1fr}
+    .cards{grid-template-columns:1fr}
+    h1{font-size:20px}
+    .verdict .big{font-size:23px}
+    .wrap{padding:14px 13px 60px}
+    th,td{padding:7px 6px;font-size:12.5px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <nav><a href="index.html">← 상황별 적정주가 계산기</a> <a href="momentum.html" style="margin-left:14px">모멘텀·섹터 스크리너</a></nav>
+  <h1>물타기·불타기 시뮬레이터</h1>
+  <p class="sub">종목의 실제 과거 시세를 불러와서, 하락 시 추가매수(물타기)·상승 시 추가매수(불타기) 전략을 적용했을 때 수익률이 실제로 얼마였는지 계산합니다.</p>
+</header>
+
+<section>
+  <div class="stitle"><h2>1. 종목과 기간</h2><span>과거 시세를 불러옵니다</span></div>
+  <div class="panel">
+    <div class="fetchbar">
+      <input id="q" placeholder="종목명 또는 6자리 코드 (예: 삼성전자, 005930)" autocomplete="off">
+      <button class="act" id="btnSearch">검색</button>
+    </div>
+    <div id="picker" class="picker"></div>
+    <p id="fstatus" class="fstatus">종목을 먼저 고르세요.</p>
+
+    <div class="presets" id="presets">
+      <button data-m="3">3개월</button>
+      <button data-m="6">6개월</button>
+      <button data-m="12" aria-pressed="true">1년</button>
+      <button data-m="24">2년</button>
+    </div>
+    <div class="grid2">
+      <div class="f"><label for="start">시작일</label><input id="start" type="date"></div>
+      <div class="f"><label for="end">종료일</label><input id="end" type="date"></div>
+    </div>
+    <p class="note">기간이 길수록(특히 2년) 과거 시세를 불러오는 데 시간이 더 걸립니다.</p>
+  </div>
+</section>
+
+<section>
+  <div class="stitle"><h2>2. 매매 전략</h2><span id="stockLabel"></span></div>
+  <div class="panel">
+    <div class="grid2">
+      <div class="f">
+        <label for="initial">최초 매수금액 (원)</label>
+        <input id="initial" type="number" value="1000000" step="10000">
+      </div>
+      <div class="f">
+        <label>기준 가격</label>
+        <div class="radiorow">
+          <label><input type="radio" name="baseRef" value="last" checked> 직전 매수가 대비</label>
+          <label><input type="radio" name="baseRef" value="first"> 최초 매수가 대비(계단식)</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="strategy down">
+      <div class="stitle2">
+        <label class="toggle"><input type="checkbox" id="downOn" checked> <h3 style="display:inline">하락 시 물타기</h3></label>
+      </div>
+      <div class="grid">
+        <div class="f"><label for="downTrig">하락 트리거 (%)</label><input id="downTrig" type="number" value="10" step="0.5"></div>
+        <div class="f"><label for="downAmt">1회 매수금액 (원)</label><input id="downAmt" type="number" value="500000" step="10000"></div>
+        <div class="f"><label for="downMult">회차별 증액 배수</label><input id="downMult" type="number" value="1.0" step="0.1" min="0.1"></div>
+        <div class="f"><label for="downMax">최대 회차</label><input id="downMax" type="number" value="5" step="1" min="0"></div>
+      </div>
+    </div>
+
+    <div class="strategy up">
+      <div class="stitle2">
+        <label class="toggle"><input type="checkbox" id="upOn"> <h3 style="display:inline">상승 시 불타기</h3></label>
+      </div>
+      <div class="grid">
+        <div class="f"><label for="upTrig">상승 트리거 (%)</label><input id="upTrig" type="number" value="10" step="0.5"></div>
+        <div class="f"><label for="upAmt">1회 매수금액 (원)</label><input id="upAmt" type="number" value="500000" step="10000"></div>
+        <div class="f"><label for="upMult">회차별 증액 배수</label><input id="upMult" type="number" value="1.0" step="0.1" min="0.1"></div>
+        <div class="f"><label for="upMax">최대 회차</label><input id="upMax" type="number" value="5" step="1" min="0"></div>
+      </div>
+    </div>
+
+    <div class="row">
+      <button class="act" id="btnRun">시뮬레이션 실행</button>
+      <span id="runStatus" class="fstatus"></span>
+    </div>
+  </div>
+</section>
+
+<section id="resultSec" style="display:none">
+  <div class="stitle"><h2>3. 결과</h2><span id="periodLabel"></span></div>
+
+  <div class="verdict" id="verdict"></div>
+
+  <div class="panel" style="margin-top:12px">
+    <div class="cards">
+      <div class="card"><b>총 투입금액</b><span id="rInvested">—</span></div>
+      <div class="card"><b>총 보유수량</b><span id="rShares">—</span></div>
+      <div class="card"><b>평균 매수단가</b><span id="rAvg">—</span></div>
+      <div class="card"><b>평가금액</b><span id="rValue">—</span></div>
+      <div class="card"><b>손익</b><span id="rProfit">—</span></div>
+      <div class="card"><b>수익률</b><span id="rReturn">—</span></div>
+    </div>
+    <p class="note" id="lumpNote"></p>
+  </div>
+
+  <div class="panel" style="margin-top:12px">
+    <svg id="chart" viewBox="0 0 700 260" width="100%" role="img" aria-label="가격 추이와 매수 시점"></svg>
+  </div>
+
+  <div class="panel" style="margin-top:12px">
+    <table>
+      <thead><tr><th>회차</th><th>날짜</th><th>구분</th><th>매수가</th><th>매수금액</th><th>수량</th></tr></thead>
+      <tbody id="tradeTable"></tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <details>
+    <summary>계산 방식</summary>
+    <div class="dbody">
+      <ul>
+        <li>최초 매수: 시작일 종가에 최초 매수금액만큼 매수합니다.</li>
+        <li><b>직전 매수가 대비</b> 모드 — 가장 최근에 산 가격에서 트리거(%)만큼 다시 움직이면 그때마다 추가매수합니다. 계속 내리면 물타기가 계속 이어질 수 있습니다.</li>
+        <li><b>최초 매수가 대비(계단식)</b> 모드 — 최초 매수가 기준으로 −10%, −20%, −30%… 처럼 정해진 계단을 하나씩 통과할 때마다 추가매수합니다.</li>
+        <li>회차별 증액 배수가 1보다 크면 뒤로 갈수록 매수금액이 커집니다(예: 1.2 = 회차마다 20%씩 증액).</li>
+        <li>수익률 = (총 보유수량 × 종료일 종가 − 총 투입금액) ÷ 총 투입금액.</li>
+        <li>비교 기준(한번에 매수)은 전략과 똑같은 총 투입금액을 시작일에 전부 매수했다고 가정한 값입니다.</li>
+      </ul>
+    </div>
+  </details>
+  <details style="margin-top:8px">
+    <summary>데이터와 한계</summary>
+    <div class="dbody">
+      <ul>
+        <li>과거 시세는 네이버 금융에서 가져오며, 거래일 종가 기준입니다(장중 변동은 반영하지 않습니다).</li>
+        <li>배당, 세금, 매매 수수료, 슬리피지는 계산에 포함되지 않습니다.</li>
+        <li>이 결과는 과거 데이터에 대한 계산일 뿐이며, 미래 수익을 보장하지 않습니다.</li>
+      </ul>
+    </div>
+  </details>
+</section>
+
+<footer>
+  이 페이지는 계산 도구입니다. 투자 판단과 그 결과는 이용자 본인의 몫이며, 어떤 종목의 매수·매도 권유도 아닙니다.
+</footer>
+
+</div>
+
+<script src="sim-core.js"></script>
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  var currentCode = null, currentName = null;
+  var lastSeries = null, lastSeriesCode = null, lastSeriesSince = null;
+
+  function fmtWon(n){ if(!isFinite(n)) return '—'; return Math.round(n).toLocaleString('ko-KR') + '원'; }
+  function fmtNum(n, d){ if(!isFinite(n)) return '—'; return n.toLocaleString('ko-KR', {maximumFractionDigits: d==null?2:d}); }
+  function fmtPct(n){ if(!isFinite(n)) return '—'; return (n>=0?'+':'') + n.toFixed(2) + '%'; }
+  function todayStr(){ var d=new Date(); return d.toISOString().slice(0,10); }
+  function addMonths(dateStr, m){
+    var d = new Date(dateStr + 'T00:00:00');
+    d.setMonth(d.getMonth() - m);
+    return d.toISOString().slice(0,10);
+  }
+
+  $('end').value = todayStr();
+  $('start').value = addMonths(todayStr(), 12);
+
+  /* ── 기간 프리셋 ───────────────────────────── */
+  document.querySelectorAll('#presets button').forEach(function(b){
+    b.addEventListener('click', function(){
+      document.querySelectorAll('#presets button').forEach(function(x){ x.setAttribute('aria-pressed','false'); });
+      b.setAttribute('aria-pressed','true');
+      $('start').value = addMonths($('end').value || todayStr(), Number(b.dataset.m));
+    });
+  });
+  ['start','end'].forEach(function(id){
+    $(id).addEventListener('input', function(){
+      document.querySelectorAll('#presets button').forEach(function(x){ x.setAttribute('aria-pressed','false'); });
+    });
+  });
+
+  /* ── 종목 검색 ───────────────────────────── */
+  function status(msg, kind){
+    var el = $('fstatus');
+    el.className = 'fstatus' + (kind ? ' ' + kind : '');
+    el.textContent = msg;
+  }
+  function req(path){
+    return fetch(path).then(function(r){
+      return r.json().then(function(j){
+        if(!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        return j;
+      });
+    });
+  }
+
+  function pickStock(code, name){
+    currentCode = code; currentName = name || code;
+    $('picker').innerHTML = '';
+    $('q').value = currentName;
+    $('stockLabel').textContent = currentName + ' (' + code + ')';
+    status(currentName + ' 선택됨. [시뮬레이션 실행]을 누르면 시세를 불러옵니다.');
+  }
+
+  function doSearch(){
+    var q = $('q').value.trim();
+    if(!q){ status('종목명이나 6자리 코드를 넣으세요.', 'err'); return; }
+    if(/^\d{6}$/.test(q)){ pickStock(q, q); return; }
+    status('종목을 찾는 중…', 'busy');
+    req('/api/search?q=' + encodeURIComponent(q)).then(function(list){
+      if(!list.length){ status('검색 결과가 없습니다. 6자리 종목코드를 직접 넣어 보세요.', 'err'); return; }
+      if(list.length === 1){ pickStock(list[0].code, list[0].name); return; }
+      status('어느 종목인가요?');
+      $('picker').innerHTML = list.map(function(it){
+        return '<button data-code="'+it.code+'" data-name="'+it.name+'">'+it.name+' <span style="color:#7B8896">'+it.code+'</span></button>';
+      }).join('');
+      $('picker').querySelectorAll('button').forEach(function(b){
+        b.addEventListener('click', function(){ pickStock(b.dataset.code, b.dataset.name); });
+      });
+    }).catch(function(e){ status('검색에 실패했습니다 — ' + e.message, 'err'); });
+  }
+  $('btnSearch').addEventListener('click', doSearch);
+  $('q').addEventListener('keydown', function(e){ if(e.key === 'Enter') doSearch(); });
+
+  /* ── 시세 불러오기 + 시뮬레이션 ───────────────────────────── */
+  function runStatus(msg, kind){
+    var el = $('runStatus');
+    el.className = 'fstatus' + (kind ? ' ' + kind : '');
+    el.textContent = msg;
+  }
+
+  function getSeries(){
+    var since = $('start').value;
+    if(lastSeries && lastSeriesCode === currentCode && lastSeriesSince === since){
+      return Promise.resolve(lastSeries);
+    }
+    return req('/api/history/' + currentCode + '?since=' + since).then(function(r){
+      lastSeries = r.series; lastSeriesCode = currentCode; lastSeriesSince = since;
+      return r.series;
+    });
+  }
+
+  function readParams(){
+    return {
+      initialAmount: Number($('initial').value) || 0,
+      baseRef: document.querySelector('input[name="baseRef"]:checked').value,
+      down: {
+        enabled: $('downOn').checked,
+        triggerPct: Number($('downTrig').value) || 10,
+        amount: Number($('downAmt').value) || 0,
+        mult: Number($('downMult').value) || 1,
+        maxRounds: Number($('downMax').value) || 0,
+      },
+      up: {
+        enabled: $('upOn').checked,
+        triggerPct: Number($('upTrig').value) || 10,
+        amount: Number($('upAmt').value) || 0,
+        mult: Number($('upMult').value) || 1,
+        maxRounds: Number($('upMax').value) || 0,
+      },
+    };
+  }
+
+  $('btnRun').addEventListener('click', function(){
+    if(!currentCode){ runStatus('먼저 종목을 검색해서 고르세요.', 'err'); return; }
+    if(!$('start').value || !$('end').value || $('start').value >= $('end').value){
+      runStatus('시작일이 종료일보다 빨라야 합니다.', 'err'); return;
+    }
+    runStatus('과거 시세를 불러오는 중… (기간이 길면 다소 걸립니다)', 'busy');
+    getSeries().then(function(series){
+      var end = $('end').value;
+      var sliced = series.filter(function(r){ return r.date <= end; });
+      if(sliced.length < 2){
+        runStatus('선택한 기간에 거래일 데이터가 충분하지 않습니다.', 'err');
+        return;
+      }
+      var params = readParams();
+      var result;
+      try{ result = SimCore.simulateStrategy(sliced, params); }
+      catch(e){ runStatus('계산 중 문제가 발생했습니다 — ' + e.message, 'err'); return; }
+      runStatus(sliced.length + '개 거래일로 계산했습니다.');
+      render(sliced, result, params);
+    }).catch(function(e){
+      runStatus('시세를 불러오지 못했습니다 — ' + e.message, 'err');
+    });
+  });
+
+  function render(series, r, params){
+    $('resultSec').style.display = 'block';
+    $('periodLabel').textContent = series[0].date + ' ~ ' + series[series.length-1].date + ' · 거래일 ' + series.length + '일';
+
+    var vEl = $('verdict');
+    var better = r.returnPct >= r.lump.returnPct;
+    $('rInvested').textContent = fmtWon(r.totalInvested);
+    $('rShares').textContent = fmtNum(r.totalShares, 4) + '주';
+    $('rAvg').textContent = fmtWon(r.avgCost);
+    $('rValue').textContent = fmtWon(r.finalValue);
+    var rProfit = $('rProfit');
+    rProfit.textContent = (r.profit>=0?'+':'') + fmtWon(Math.abs(r.profit)).replace('원','') + '원';
+    rProfit.className = r.profit>=0 ? 'gain-t' : 'loss-t';
+    var rReturn = $('rReturn');
+    rReturn.textContent = fmtPct(r.returnPct);
+    rReturn.className = r.returnPct>=0 ? 'gain-t' : 'loss-t';
+
+    vEl.innerHTML = '<div class="tag">' + r.buys.length + '회 매수 · 총 ' + fmtWon(r.totalInvested) + ' 투입</div>'
+      + '<div class="big">' + fmtPct(r.returnPct) + '</div>'
+      + '<div class="line">평가금액 ' + fmtWon(r.finalValue) + ' · 손익 ' + (r.profit>=0?'+':'') + fmtWon(Math.abs(r.profit)) + '</div>';
+
+    $('lumpNote').textContent = '같은 총 투입금액(' + fmtWon(r.totalInvested) + ')을 시작일에 한번에 매수했다면 수익률은 '
+      + fmtPct(r.lump.returnPct) + '이었습니다. 전략은 그보다 ' + (better ? '유리했습니다.' : '불리했습니다.');
+
+    var rows = r.buys.map(function(b, i){
+      return '<tr><td>' + (i+1) + '</td><td>' + b.date + '</td>'
+        + '<td class="kind-' + b.kind + '">' + b.kind + '</td>'
+        + '<td>' + fmtWon(b.price) + '</td><td>' + fmtWon(b.amount) + '</td>'
+        + '<td>' + fmtNum(b.shares, 4) + '</td></tr>';
+    }).join('');
+    $('tradeTable').innerHTML = rows;
+
+    drawChart(series, r.buys);
+  }
+
+  function drawChart(series, buys){
+    var svg = $('chart');
+    var prices = series.map(function(s){ return s.close; });
+    var min = Math.min.apply(null, prices), max = Math.max.apply(null, prices);
+    var pad = (max-min)*0.08 || max*0.05 || 1;
+    min -= pad; max += pad;
+    var L=60, R=680, T=16, B=220, W=R-L, H=B-T;
+    var n = series.length;
+    function x(i){ return n<=1 ? L : L + (i/(n-1))*W; }
+    function y(v){ return T + (1-(v-min)/(max-min))*H; }
+    function dateOf(i){ return series[i].date; }
+    var dateIndex = {};
+    series.forEach(function(s,i){ dateIndex[s.date]=i; });
+
+    var path = prices.map(function(p,i){ return (i===0?'M':'L') + x(i).toFixed(1) + ',' + y(p).toFixed(1); }).join(' ');
+
+    var s = '';
+    s += '<line x1="'+L+'" y1="'+B+'" x2="'+R+'" y2="'+B+'" stroke="#D6DDE5"/>';
+    [min+pad, (min+max)/2, max-pad].forEach(function(v){
+      s += '<text x="'+(L-8)+'" y="'+(y(v)+4)+'" fill="#7B8896" font-size="10.5" text-anchor="end">'+Math.round(v).toLocaleString('ko-KR')+'</text>';
+      s += '<line x1="'+L+'" y1="'+y(v)+'" x2="'+R+'" y2="'+y(v)+'" stroke="#EEF1F4"/>';
+    });
+    s += '<path d="'+path+'" fill="none" stroke="#16202C" stroke-width="1.6"/>';
+
+    var COLOR = { '최초매수':'#3C4B5A', '물타기':'#C8342B', '불타기':'#1F5FBF' };
+    buys.forEach(function(b){
+      var i = dateIndex[b.date];
+      if(i == null) return;
+      var cx = x(i), cy = y(b.price);
+      s += '<circle cx="'+cx.toFixed(1)+'" cy="'+cy.toFixed(1)+'" r="5" fill="'+COLOR[b.kind]+'" stroke="#fff" stroke-width="1.5"/>';
+    });
+    s += '<text x="'+L+'" y="238" fill="#7B8896" font-size="10.5">검정 선 = 종가 · 회색 원 = 최초매수 · 빨강 = 물타기 · 파랑 = 불타기</text>';
+    svg.innerHTML = s;
+  }
+})();
+</script>
+</body>
+</html>

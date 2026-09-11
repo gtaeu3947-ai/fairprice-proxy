@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>상황별 적정주가 계산기</title>
+<meta name="description" content="상승장·횡보장·하락장 국면별로 요구수익률과 초과이익 지속 가정을 다르게 적용해 적정주가를 한 화면에서 비교합니다.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="상황별 적정주가 계산기">
+<meta property="og:description" content="같은 종목도 국면에 따라 적정주가가 달라집니다. 상승장·횡보장·하락장 세 가지 기준을 동시에 비교해 보세요.">
+<meta property="og:locale" content="ko_KR">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#16202C">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20rx='14'%20fill='%2316202C'/%3E%3Crect%20x='14'%20y='34'%20width='8'%20height='18'%20rx='2'%20fill='%23C8342B'/%3E%3Crect%20x='28'%20y='22'%20width='8'%20height='30'%20rx='2'%20fill='%23A97614'/%3E%3Crect%20x='42'%20y='14'%20width='8'%20height='38'%20rx='2'%20fill='%231F5FBF'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<style>
+  :root{
+    --ink:#16202C; --ink-2:#4A5966; --ink-3:#7B8896;
+    --paper:#EDF0F4; --panel:#FFFFFF; --line:#D6DDE5; --line-2:#E9EEF3;
+    --bull:#C8342B; --flat:#A97614; --bear:#1F5FBF;
+    --buy:#12704C; --warn:#B4451C;
+    --r:10px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--paper); color:var(--ink);
+    font-family:"Pretendard Variable",Pretendard,-apple-system,"Apple SD Gothic Neo","Malgun Gothic","맑은 고딕",sans-serif;
+    font-size:15px; line-height:1.55;
+    font-feature-settings:"tnum" 1;
+    -webkit-text-size-adjust:100%;
+  }
+  .wrap{max-width:1060px;margin:0 auto;padding:20px 16px 72px}
+  h1,h2,h3{margin:0;font-weight:700;letter-spacing:-0.02em}
+  a{color:var(--bear)}
+
+  /* header */
+  header{padding:8px 0 20px;border-bottom:2px solid var(--ink)}
+  h1{font-size:26px;line-height:1.2}
+  .sub{color:var(--ink-2);font-size:13.5px;margin-top:6px}
+  .memo{
+    margin-top:14px;padding:11px 13px;background:var(--panel);
+    border:1px solid var(--line);border-left:4px solid var(--flat);border-radius:var(--r);
+    font-size:13.5px;color:var(--ink-2)
+  }
+  .memo b{color:var(--ink)}
+
+  section{margin-top:26px}
+  .stitle{display:flex;align-items:baseline;gap:10px;margin-bottom:12px}
+  .stitle h2{font-size:17px}
+  .stitle span{font-size:13px;color:var(--ink-3)}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+
+  /* inputs */
+  .grid{display:grid;gap:12px 14px;grid-template-columns:repeat(4,1fr)}
+  .f{display:flex;flex-direction:column;gap:5px;min-width:0}
+  .f label{font-size:12.5px;color:var(--ink-2);font-weight:600}
+  .f .hint{font-size:11.5px;color:var(--ink-3);font-weight:400}
+  input,select{
+    font:inherit;font-size:15px;color:var(--ink);background:#FBFCFD;
+    border:1px solid var(--line);border-radius:7px;padding:9px 10px;width:100%;
+    font-feature-settings:"tnum" 1;
+  }
+  input:focus,select:focus,button:focus-visible{outline:2.5px solid var(--bear);outline-offset:1px}
+  .span2{grid-column:span 2}
+
+  /* regime switch */
+  .regimes{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
+  .rbtn{
+    font:inherit;font-weight:700;font-size:15px;cursor:pointer;text-align:left;
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+    padding:11px 12px;color:var(--ink-3);line-height:1.3;
+  }
+  .rbtn small{display:block;font-size:11.5px;font-weight:500;margin-top:3px}
+  .rbtn[aria-pressed="true"]{color:#fff;border-color:transparent}
+  .rbtn[data-r="up"][aria-pressed="true"]{background:var(--bull)}
+  .rbtn[data-r="flat"][aria-pressed="true"]{background:var(--flat)}
+  .rbtn[data-r="down"][aria-pressed="true"]{background:var(--bear)}
+
+  /* verdict */
+  .verdict{border-radius:var(--r);padding:18px 18px 16px;color:#fff;background:var(--ink)}
+  .verdict .tag{font-size:12.5px;font-weight:700;opacity:.85}
+  .verdict .big{font-size:32px;font-weight:800;letter-spacing:-0.03em;line-height:1.15;margin:4px 0 2px}
+  .verdict .line{font-size:14px;opacity:.92}
+  .v-buy{background:var(--buy)} .v-watch{background:var(--flat)}
+  .v-hold{background:#3C4B5A} .v-trim{background:var(--warn)}
+
+  /* scale bar */
+  .bar{margin-top:14px}
+  .bar .track{position:relative;height:34px;border-radius:6px;overflow:hidden;display:flex;border:1px solid var(--line)}
+  .bar .zone{flex:1;display:flex;align-items:center;justify-content:center;font-size:11.5px;font-weight:600;color:#fff}
+  .z1{background:var(--buy)} .z2{background:#4E8F72} .z3{background:#9AA6B2} .z4{background:var(--warn)}
+  .mark{position:absolute;top:-1px;bottom:-1px;width:3px;background:var(--ink);box-shadow:0 0 0 2px #fff}
+  .marklab{font-size:12px;color:var(--ink-2);margin-top:6px}
+
+  /* compare cards */
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:13px;border-top:4px solid}
+  .card.up{border-top-color:var(--bull)} .card.flat{border-top-color:var(--flat)} .card.down{border-top-color:var(--bear)}
+  .card h3{font-size:13.5px}
+  .card .p{font-size:24px;font-weight:800;letter-spacing:-0.03em;margin:6px 0 2px}
+  .card .d{font-size:13px;font-weight:700}
+  .card .meta{font-size:11.5px;color:var(--ink-3);margin-top:8px;border-top:1px solid var(--line-2);padding-top:7px}
+  .up-t{color:var(--bull)} .down-t{color:var(--bear)}
+
+  /* table */
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{padding:9px 10px;text-align:right;border-bottom:1px solid var(--line-2)}
+  th{font-size:12.5px;color:var(--ink-2);font-weight:600;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  tbody tr:last-child td{border-bottom:none}
+  tr.base td{background:#F4F7FA;font-weight:700}
+  .num{font-variant-numeric:tabular-nums}
+
+  .note{font-size:13px;color:var(--ink-2);margin-top:10px}
+  .warnbox{margin-top:12px;padding:11px 13px;border-radius:var(--r);background:#FDF1EC;border:1px solid #F0C9B8;color:#7A2E10;font-size:13.5px}
+  .warnbox:empty{display:none}
+
+  button.act{
+    font:inherit;font-weight:600;font-size:14px;cursor:pointer;background:var(--ink);color:#fff;
+    border:none;border-radius:7px;padding:10px 16px;
+  }
+  button.ghost{background:var(--panel);color:var(--ink);border:1px solid var(--line)}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px}
+
+  .fetchbar{display:flex;gap:8px}
+  .fetchbar input{flex:1;min-width:0}
+  .fetchbar button{white-space:nowrap}
+  .picker{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .picker:empty{display:none}
+  .picker button{
+    font:inherit;font-size:13.5px;cursor:pointer;background:#F1F4F8;color:var(--ink);
+    border:1px solid var(--line);border-radius:20px;padding:6px 13px;
+  }
+  .fstatus{font-size:12.5px;color:var(--ink-3);margin:9px 0 0}
+  .fstatus.err{color:var(--warn)}
+  .fstatus.busy{color:var(--bear)}
+  input.auto{background:#EDF7F1;border-color:#9EC9B3}
+
+  details{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:0 14px}
+  details+details{margin-top:8px}
+  summary{cursor:pointer;padding:13px 0;font-weight:600;font-size:14.5px}
+  details[open] summary{border-bottom:1px solid var(--line-2)}
+  .dbody{padding:12px 0 14px;font-size:13.5px;color:var(--ink-2)}
+  .dbody code{background:#F1F4F8;padding:1px 5px;border-radius:4px;font-size:12.5px}
+  .dbody ul{margin:8px 0;padding-left:18px} .dbody li{margin:4px 0}
+
+  footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink-3)}
+
+  @media (max-width:820px){
+    .grid{grid-template-columns:repeat(2,1fr)}
+    .cards{grid-template-columns:1fr}
+    .regimes{grid-template-columns:1fr}
+    h1{font-size:22px}
+    .verdict .big{font-size:26px}
+    .wrap{padding:16px 13px 60px}
+    th,td{padding:8px 6px;font-size:13.5px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <nav style="font-size:13px;margin-bottom:8px;display:flex;gap:14px;flex-wrap:wrap"><a href="simulator.html" style="color:var(--ink-2);text-decoration:none">물타기·불타기 시뮬레이터 →</a><a href="momentum.html" style="color:var(--ink-2);text-decoration:none">모멘텀·섹터 스크리너 →</a></nav>
+  <h1>상황별 적정주가 계산기 <span style="color:var(--ink-3);font-weight:600">국면 대응판</span></h1>
+  <p class="sub">같은 기업이라도 상승장·횡보장·하락장에서 요구수익률과 초과이익 지속 가정이 달라집니다. 세 국면의 적정주가를 한 화면에서 비교하고, 국면에 맞는 매수 구간까지 계산합니다.</p>
+  <div class="memo">
+    <b>시장 메모 (2026-09-08 기준)</b> — 코스피가 전날(9/7) 4.61% 급등해 6,995.48로 마감한 데 이어, 오늘 개장과 동시에 7,000선을 돌파했습니다(8월 18일 이후 15거래일 만). 오픈AI 신모델 발 메모리 수요 기대로 삼성전자·SK하이닉스 등 반도체 대형주가 랠리를 이끌고 있고, 기관 매수세도 유입되는 모습입니다. 그동안의 6,000~7,000 박스권이 위로 뚫린 모양새라 기본 국면을 <b>상승장</b>으로 바꿔두었습니다. 다만 하루 급등 이후라 변동성이 클 수 있으니, 되돌림이 나오면 국면을 다시 조정하세요.
+  </div>
+</header>
+
+<section>
+  <div class="stitle"><h2>1. 기업 데이터</h2><span>종목을 불러오거나 직접 입력하세요</span></div>
+  <div class="panel">
+    <div class="fetchbar">
+      <input id="q" placeholder="종목명 또는 6자리 코드 (예: 삼성전자, 005930)" autocomplete="off">
+      <button class="act" id="btnFetch">불러오기</button>
+    </div>
+    <div id="picker" class="picker"></div>
+    <p id="fstatus" class="fstatus">불러온 값은 연한 초록으로 표시됩니다. 직접 고치면 그 표시가 사라집니다.</p>
+    <details style="margin:10px 0 4px;border:none;padding:0">
+      <summary style="font-size:13px;padding:6px 0;color:var(--ink-3)">서버 주소 설정</summary>
+      <div class="dbody" style="padding:6px 0 10px">
+        <input id="api" placeholder="비워두면 이 페이지와 같은 서버를 씁니다 (예: https://내주소.onrender.com)">
+        <p class="note" style="margin-top:6px">HTML 파일을 컴퓨터에서 직접 열었을 때만 주소를 넣으면 됩니다.</p>
+      </div>
+    </details>
+    <hr style="border:none;border-top:1px solid var(--line-2);margin:6px 0 16px">
+    <div class="grid">
+      <div class="f span2">
+        <label for="name">종목명</label>
+        <input id="name" value="예시 A기업" autocomplete="off">
+      </div>
+      <div class="f">
+        <label for="price">현재가 <span class="hint">원</span></label>
+        <input id="price" type="number" value="25000" step="1">
+      </div>
+      <div class="f">
+        <label for="equity">지배주주지분 자기자본 <span class="hint">억원</span></label>
+        <input id="equity" type="number" value="20000" step="1">
+      </div>
+
+      <div class="f">
+        <label for="roe3">3년 전 ROE <span class="hint">%</span></label>
+        <input id="roe3" type="number" value="12" step="0.01">
+      </div>
+      <div class="f">
+        <label for="roe2">2년 전 ROE <span class="hint">%</span></label>
+        <input id="roe2" type="number" value="14" step="0.01">
+      </div>
+      <div class="f">
+        <label for="roe1">전년도 ROE <span class="hint">%</span></label>
+        <input id="roe1" type="number" value="15" step="0.01">
+      </div>
+      <div class="f">
+        <label for="roew">가중평균 ROE <span class="hint">1:2:3 가중, 자동</span></label>
+        <input id="roew" readonly tabindex="-1" style="background:#F1F4F8;color:var(--ink-2)">
+      </div>
+
+      <div class="f">
+        <label for="shares">발행주식수 <span class="hint">주</span></label>
+        <input id="shares" type="number" value="100000000" step="1">
+      </div>
+      <div class="f">
+        <label for="treasury">자사주 <span class="hint">주</span></label>
+        <input id="treasury" type="number" value="5000000" step="1">
+      </div>
+      <div class="f">
+        <label for="grade">신용등급 <span class="hint">요구수익률 기준</span></label>
+        <select id="grade">
+          <option value="4.49">AAA · 4.49%</option>
+          <option value="4.58">AA+ · 4.58%</option>
+          <option value="4.64" selected>AA · 4.64%</option>
+          <option value="4.74">AA- · 4.74%</option>
+          <option value="5.41">A+ · 5.41%</option>
+          <option value="5.86">A · 5.86%</option>
+          <option value="6.46">A- · 6.46%</option>
+          <option value="8.33">BBB+ · 8.33%</option>
+          <option value="9.38">BBB · 9.38%</option>
+          <option value="10.80">BBB- · 10.80%</option>
+          <option value="custom">직접 입력</option>
+        </select>
+      </div>
+      <div class="f">
+        <label for="kbase">기준 요구수익률 <span class="hint">% · 5년물</span></label>
+        <input id="kbase" type="number" value="4.64" step="0.01">
+      </div>
+    </div>
+    <p class="note" style="margin-top:2px">기본값(AA·4.64%)은 스크리너와 맞춘 일반적인 값입니다. 종목의 실제 신용등급을 아시면 그에 맞게 바꿔서 계산하세요.</p>
+    <div class="row">
+      <button class="act ghost" id="btnAdd">비교표에 담기</button>
+      <button class="act ghost" id="btnClear">입력 비우기</button>
+      <button class="act ghost" id="btnShare">공유 링크 복사</button>
+      <span id="shareMsg" style="font-size:12.5px;color:var(--ink-3)"></span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="stitle"><h2>2. 시장 국면</h2><span>국면에 따라 할인율과 이익 지속 가정이 바뀝니다</span></div>
+  <div class="regimes">
+    <button class="rbtn" data-r="up" aria-pressed="true">상승장<small>추세 상단, 이익 눈높이 상향</small></button>
+    <button class="rbtn" data-r="flat" aria-pressed="false">횡보장<small>박스권, 방향성 없음</small></button>
+    <button class="rbtn" data-r="down" aria-pressed="false">하락장<small>추세 이탈, 이익 추정 하향</small></button>
+  </div>
+
+  <details>
+    <summary>국면 판정 도우미 — 지수 숫자로 확인하기</summary>
+    <div class="dbody">
+      <div class="grid" style="grid-template-columns:repeat(3,1fr)">
+        <div class="f"><label for="idxNow">지수 현재값</label><input id="idxNow" type="number" placeholder="6579" step="0.01"></div>
+        <div class="f"><label for="idxMa">200일 이동평균</label><input id="idxMa" type="number" placeholder="6900" step="0.01"></div>
+        <div class="f"><label for="idxHigh">52주 최고</label><input id="idxHigh" type="number" placeholder="8100" step="0.01"></div>
+      </div>
+      <p id="judge" class="note">세 값을 넣으면 국면을 추천합니다. 200일선 대비 위치와 전고점 대비 낙폭으로 판단합니다.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary>국면별 기준값 조정</summary>
+    <div class="dbody">
+      <table>
+        <thead><tr><th>항목</th><th>상승장</th><th>횡보장</th><th>하락장</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>요구수익률 가산 (%p)</td>
+            <td><input class="pset num" data-k="kAdj" data-r="up" type="number" value="-1" step="0.1"></td>
+            <td><input class="pset num" data-k="kAdj" data-r="flat" type="number" value="0" step="0.1"></td>
+            <td><input class="pset num" data-k="kAdj" data-r="down" type="number" value="2" step="0.1"></td>
+          </tr>
+          <tr>
+            <td>기준 초과이익 지속계수 w</td>
+            <td><input class="pset num" data-k="w" data-r="up" type="number" value="1.0" step="0.05" min="0.1" max="1"></td>
+            <td><input class="pset num" data-k="w" data-r="flat" type="number" value="0.8" step="0.05" min="0.1" max="1"></td>
+            <td><input class="pset num" data-k="w" data-r="down" type="number" value="0.6" step="0.05" min="0.1" max="1"></td>
+          </tr>
+          <tr>
+            <td>요구 안전마진 (%)</td>
+            <td><input class="pset num" data-k="mos" data-r="up" type="number" value="15" step="1"></td>
+            <td><input class="pset num" data-k="mos" data-r="flat" type="number" value="25" step="1"></td>
+            <td><input class="pset num" data-k="mos" data-r="down" type="number" value="40" step="1"></td>
+          </tr>
+          <tr>
+            <td>과열 판단 마진 (%)</td>
+            <td><input class="pset num" data-k="hot" data-r="up" type="number" value="20" step="1"></td>
+            <td><input class="pset num" data-k="hot" data-r="flat" type="number" value="10" step="1"></td>
+            <td><input class="pset num" data-k="hot" data-r="down" type="number" value="0" step="1"></td>
+          </tr>
+          <tr>
+            <td>분할매수 횟수</td>
+            <td><input class="pset num" data-k="n" data-r="up" type="number" value="3" step="1" min="1" max="8"></td>
+            <td><input class="pset num" data-k="n" data-r="flat" type="number" value="4" step="1" min="1" max="8"></td>
+            <td><input class="pset num" data-k="n" data-r="down" type="number" value="5" step="1" min="1" max="8"></td>
+          </tr>
+          <tr>
+            <td>추가 하락 대비폭 (%p)</td>
+            <td><input class="pset num" data-k="depth" data-r="up" type="number" value="10" step="1"></td>
+            <td><input class="pset num" data-k="depth" data-r="flat" type="number" value="15" step="1"></td>
+            <td><input class="pset num" data-k="depth" data-r="down" type="number" value="20" step="1"></td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="note">기본값은 관행적인 보수성 차이를 반영한 출발점입니다. 본인 원칙에 맞게 바꿔서 쓰세요.</p>
+    </div>
+  </details>
+</section>
+
+<section>
+  <div class="stitle"><h2>3. 판정</h2><span id="vsub"></span></div>
+  <div class="verdict" id="verdict">
+    <div class="tag" id="vtag">—</div>
+    <div class="big" id="vbig">—</div>
+    <div class="line" id="vline"></div>
+  </div>
+  <div class="bar">
+    <div class="track" id="track">
+      <div class="zone z1">적극매수</div>
+      <div class="zone z2">분할매수</div>
+      <div class="zone z3">관망</div>
+      <div class="zone z4">비중축소</div>
+      <div class="mark" id="mark" style="left:50%"></div>
+    </div>
+    <div class="marklab" id="marklab"></div>
+  </div>
+  <div class="warnbox" id="warn"></div>
+</section>
+
+<section>
+  <div class="stitle"><h2>4. 국면별 적정주가</h2><span>각 국면의 기준 가정으로 계산</span></div>
+  <div class="cards" id="cards"></div>
+  <div class="panel" style="margin-top:12px">
+    <svg id="chart" viewBox="0 0 700 220" width="100%" role="img" aria-label="국면별 적정주가 범위와 현재가 비교"></svg>
+  </div>
+</section>
+
+<section>
+  <div class="stitle"><h2>5. 초과이익 지속 가정별 적정주가</h2><span id="tsub"></span></div>
+  <div class="panel">
+    <table>
+      <thead><tr><th>초과이익 가정</th><th>지속계수 w</th><th>기업가치 (억원)</th><th>적정주가</th><th>현재가 대비</th></tr></thead>
+      <tbody id="wtable"></tbody>
+    </table>
+    <p class="note">지속계수 w는 초과이익이 앞으로 얼마나 유지될지를 나타냅니다. w=1이면 현재 수준이 계속 이어진다는 뜻이고, 낮을수록 빨리 소멸한다고 봅니다.</p>
+  </div>
+</section>
+
+<section>
+  <div class="stitle"><h2>6. 분할매수 계획</h2><span id="psub"></span></div>
+  <div class="panel">
+    <table>
+      <thead><tr><th>차수</th><th>매수 가격</th><th>적정주가 대비</th><th>현재가 대비</th><th>배분 비중</th></tr></thead>
+      <tbody id="ptable"></tbody>
+    </table>
+    <p class="note" id="pnote"></p>
+  </div>
+</section>
+
+<section id="cmpSec" style="display:none">
+  <div class="stitle"><h2>7. 담아둔 종목 비교</h2><span>이 화면을 닫으면 사라집니다</span></div>
+  <div class="panel">
+    <table>
+      <thead><tr><th>종목</th><th>현재가</th><th>상승장</th><th>횡보장</th><th>하락장</th><th>선택 국면 괴리</th></tr></thead>
+      <tbody id="cmptable"></tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="stitle"><h2>계산 방식과 데이터</h2></div>
+  <details>
+    <summary>적정주가 계산식</summary>
+    <div class="dbody">
+      <ul>
+        <li>가중평균 ROE = (3년 전 × 1 + 2년 전 × 2 + 전년도 × 3) ÷ 6</li>
+        <li>초과이익 = 자기자본 × (가중평균 ROE − 요구수익률)</li>
+        <li>기업가치 = 자기자본 + 초과이익 × <code>w ÷ (1 + k − w)</code></li>
+        <li>적정주가 = 기업가치 ÷ 유통주식수 (발행주식수 − 자사주)</li>
+      </ul>
+      <p>w = 1이면 <code>w ÷ (1 + k − w)</code>가 <code>1 ÷ k</code>가 되어, 초과이익이 영구히 지속되는 경우와 같아집니다. 원본 엑셀의 수식과 동일합니다.</p>
+    </div>
+  </details>
+  <details>
+    <summary>국면을 왜 나누는가</summary>
+    <div class="dbody">
+      <ul>
+        <li><b>요구수익률(k)</b> — 하락장에서는 같은 기업을 사는 데 더 높은 보상을 요구하게 됩니다. 신용스프레드가 벌어지는 국면이라 실제 회사채 금리도 같이 오릅니다. 상승장에서는 반대로 낮아집니다. k가 오르면 적정주가는 빠르게 내려갑니다.</li>
+        <li><b>지속계수(w)</b> — 하락장에서는 애널리스트 이익 추정치가 줄줄이 하향됩니다. 과거 3년 ROE가 그대로 이어진다고 보는 건 낙관적입니다. 그래서 기본 가정을 낮춥니다.</li>
+        <li><b>안전마진</b> — 계산값이 틀릴 확률 자체가 국면마다 다릅니다. 하락장에서 40%를 요구하는 건 계산이 더 보수적이어서가 아니라, 추가 하락 여지가 크기 때문입니다.</li>
+      </ul>
+    </div>
+  </details>
+  <details>
+    <summary>데이터를 어디서 가져오는가</summary>
+    <div class="dbody">
+      <ul>
+        <li>자기자본(지배주주지분)·ROE 3년치 — <a href="http://comp.fnguide.com" target="_blank" rel="noopener">FnGuide 기업정보</a>의 재무제표 탭</li>
+        <li>발행주식수·자사주 — 같은 페이지 주식수 항목, 또는 <a href="https://dart.fss.or.kr" target="_blank" rel="noopener">DART</a> 사업보고서</li>
+        <li>현재가 — <a href="https://finance.naver.com" target="_blank" rel="noopener">네이버 금융</a></li>
+        <li>등급별 회사채 금리 — <a href="https://www.kisrating.com/ratingsStatistics/statics_spread.do" target="_blank" rel="noopener">한국신용평가 등급별 금리스프레드</a>. 위 선택지의 값은 5년물 기준이며 금리가 움직이면 직접 갱신하세요.</li>
+      </ul>
+    </div>
+  </details>
+</section>
+
+<footer>
+  이 페이지는 계산 도구입니다. 투자 판단과 그 결과는 이용자 본인의 몫이며, 어떤 종목의 매수·매도 권유도 아닙니다. 입력한 값은 브라우저 안에서만 계산되고 어디에도 저장·전송되지 않습니다.
+</footer>
+
+</div>
+
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  var regime = 'up';
+  var LABEL = { up:'상승장', flat:'횡보장', down:'하락장' };
+  var basket = [];
+
+  function num(id){ var v = parseFloat($(id).value); return isFinite(v) ? v : 0; }
+  function fmt(n){
+    if(!isFinite(n)) return '—';
+    return Math.round(n).toLocaleString('ko-KR');
+  }
+  function pct(n,d){ d = (d===undefined)?1:d; return (n>=0?'+':'') + n.toFixed(d) + '%'; }
+
+  function params(r){
+    var o = {};
+    document.querySelectorAll('.pset[data-r="'+r+'"]').forEach(function(el){
+      o[el.dataset.k] = parseFloat(el.value);
+    });
+    return o;
+  }
+
+  function fairValue(B0, roeW, k, w){
+    if(k <= 0 || w <= 0) return NaN;
+    var factor = w / (1 + k - w);
+    return B0 + B0 * (roeW - k) * factor;
+  }
+
+  function read(){
+    var roeW = (num('roe3')*1 + num('roe2')*2 + num('roe1')*3) / 6;
+    $('roew').value = roeW.toFixed(2) + ' %';
+    return {
+      name: $('name').value.trim() || '무제',
+      price: num('price'),
+      B0: num('equity') * 1e8,
+      B0eok: num('equity'),
+      roeW: roeW / 100,
+      shares: Math.max(0, num('shares') - num('treasury')),
+      kbase: num('kbase') / 100
+    };
+  }
+
+  function calc(d, r){
+    var p = params(r);
+    var k = d.kbase + p.kAdj/100;
+    var V = fairValue(d.B0, d.roeW, k, p.w);
+    return { k:k, p:p, V:V, fair: d.shares>0 ? V/d.shares : NaN };
+  }
+
+  function verdictOf(price, fair, p){
+    var lo = fair*(1 - p.mos/100), mid = fair*(1 - p.mos/200), hi = fair*(1 + p.hot/100);
+    if(price <= lo) return {key:'buy', cls:'v-buy', txt:'적극 매수 구간'};
+    if(price <= mid) return {key:'watch', cls:'v-watch', txt:'분할 매수 구간'};
+    if(price <= hi) return {key:'hold', cls:'v-hold', txt:'관망 구간'};
+    return {key:'trim', cls:'v-trim', txt:'비중 축소 검토'};
+  }
+
+  function render(){
+    var d = read();
+    var cur = calc(d, regime);
+    var fair = cur.fair, p = cur.p;
+
+    // ---- verdict
+    var vEl = $('verdict');
+    vEl.className = 'verdict';
+    if(!isFinite(fair) || d.shares<=0 || fair<=0){
+      $('vtag').textContent = '계산 불가';
+      $('vbig').textContent = '입력값을 확인하세요';
+      $('vline').textContent = '유통주식수와 자기자본이 0보다 커야 합니다.';
+      $('mark').style.left = '50%';
+      $('marklab').textContent = '';
+    } else {
+      var gap = (d.price/fair - 1) * 100;
+      var v = verdictOf(d.price, fair, p);
+      vEl.className = 'verdict ' + v.cls;
+      $('vtag').textContent = LABEL[regime] + ' 기준 · 요구수익률 ' + (cur.k*100).toFixed(2) + '% · w ' + p.w;
+      $('vbig').textContent = v.txt;
+      $('vline').textContent = '적정주가 ' + fmt(fair) + '원 · 현재가 ' + fmt(d.price) + '원 · '
+        + (gap<0 ? Math.abs(gap).toFixed(1)+'% 저평가' : gap.toFixed(1)+'% 고평가')
+        + ' · 매수 기준가 ' + fmt(fair*(1-p.mos/100)) + '원 이하';
+
+      // scale bar: 0 .. fair*(1+hot)*1.15 mapped by zone boundaries
+      var lo = fair*(1-p.mos/100), mid = fair*(1-p.mos/200), hi = fair*(1+p.hot/100);
+      var top = Math.max(hi * 1.25, d.price * 1.08);
+      var bounds = [0, lo, mid, hi, top];
+      var zs = $('track').querySelectorAll('.zone');
+      var raw = [], sum = 0, i;
+      for(i=0;i<4;i++){ raw[i] = Math.max(0.07, (bounds[i+1]-bounds[i])/top); sum += raw[i]; }
+      var wp = raw.map(function(v){ return v/sum*100; });
+      for(i=0;i<4;i++){ zs[i].style.flex = '0 0 ' + wp[i] + '%'; }
+      var acc = 0, posPct = 100;
+      for(i=0;i<4;i++){
+        if(d.price <= bounds[i+1] || i === 3){
+          var frac = (d.price - bounds[i]) / (bounds[i+1] - bounds[i]);
+          posPct = acc + Math.max(0, Math.min(1, frac)) * wp[i];
+          break;
+        }
+        acc += wp[i];
+      }
+      $('mark').style.left = Math.max(0, Math.min(100, posPct)) + '%';
+      $('marklab').textContent = '검정 선이 현재가 ' + fmt(d.price) + '원. 구간 경계: '
+        + fmt(lo) + ' / ' + fmt(mid) + ' / ' + fmt(hi) + '원';
+    }
+
+    // ---- warning
+    var w = '';
+    if(d.roeW <= cur.k){
+      w = '가중평균 ROE(' + (d.roeW*100).toFixed(2) + '%)가 요구수익률(' + (cur.k*100).toFixed(2)
+        + '%)보다 낮습니다. 초과이익이 음수라 적정주가가 장부가치 아래로 나옵니다. 이 계산기는 초과이익을 꾸준히 내는 기업에 맞는 방식이라, 이런 경우 결과를 그대로 믿기보다 다른 방법을 함께 보세요.';
+    } else if(d.shares > 0 && d.B0/d.shares > 0){
+      var bps = d.B0/d.shares;
+      w = 'BPS(주당 순자산) ' + fmt(bps) + '원 · 현재 PBR ' + (d.price/bps).toFixed(2) + '배.';
+    }
+    $('warn').textContent = w;
+    $('vsub').textContent = d.name;
+
+    // ---- regime cards
+    var order = ['up','flat','down'];
+    var results = {};
+    var html = '';
+    order.forEach(function(r){
+      var c = calc(d, r);
+      results[r] = c;
+      var g = isFinite(c.fair) && c.fair>0 ? (d.price/c.fair - 1)*100 : NaN;
+      var gtxt = isFinite(g) ? (g<0 ? Math.abs(g).toFixed(1)+'% 저평가' : g.toFixed(1)+'% 고평가') : '—';
+      var gcls = isFinite(g) ? (g<0 ? 'down-t' : 'up-t') : '';
+      var unfit = d.roeW <= c.k;
+      var badge = unfit
+        ? '<div style="margin:-2px 0 8px;padding:5px 8px;background:#FDF1EC;border:1px solid #F0C9B8;'
+        + 'border-radius:6px;color:#7A2E10;font-size:11.5px;font-weight:600">'
+        + '⚠ ROE가 요구수익률보다 낮음 — 이 계산에 안 맞는 종목</div>'
+        : '';
+      html += '<div class="card '+r+'">'
+        + '<h3>'+LABEL[r]+(r===regime?' · 선택됨':'')+'</h3>'
+        + badge
+        + '<div class="p">'+fmt(c.fair)+'<span style="font-size:14px;font-weight:600">원</span></div>'
+        + '<div class="d '+gcls+'">'+gtxt+'</div>'
+        + '<div class="meta">요구수익률 '+(c.k*100).toFixed(2)+'% · w '+c.p.w
+        + '<br>매수 기준 '+fmt(c.fair*(1-c.p.mos/100))+'원 이하 (안전마진 '+c.p.mos+'%)</div>'
+        + '</div>';
+    });
+    $('cards').innerHTML = html;
+
+    drawChart(d, results);
+
+    // ---- w table
+    var rows = [
+      ['초과이익 지속', 1.0],
+      ['10% 감소', 0.9],
+      ['20% 감소', 0.8],
+      ['30% 감소', 0.7],
+      ['50% 감소', 0.5]
+    ];
+    var tb = '';
+    rows.forEach(function(row){
+      var V = fairValue(d.B0, d.roeW, cur.k, row[1]);
+      var f = d.shares>0 ? V/d.shares : NaN;
+      var g = isFinite(f)&&f>0 ? (d.price/f-1)*100 : NaN;
+      var isBase = Math.abs(row[1]-p.w) < 0.001;
+      tb += '<tr class="'+(isBase?'base':'')+'"><td>'+row[0]+(isBase?' · 기준':'')+'</td>'
+        + '<td class="num">'+row[1].toFixed(1)+'</td>'
+        + '<td class="num">'+fmt(V/1e8)+'</td>'
+        + '<td class="num">'+fmt(f)+'</td>'
+        + '<td class="num '+(isFinite(g)?(g<0?'down-t':'up-t'):'')+'">'+(isFinite(g)?pct(g):'—')+'</td></tr>';
+    });
+    $('wtable').innerHTML = tb;
+    $('tsub').textContent = LABEL[regime]+' 요구수익률 '+(cur.k*100).toFixed(2)+'% 적용';
+
+    // ---- staged buying
+    var pt = '';
+    if(isFinite(fair) && fair>0){
+      var start = fair*(1-p.mos/100);
+      var floor = fair*(1-(p.mos+p.depth)/100);
+      var n = Math.max(1, Math.round(p.n));
+      var weights = [];
+      for(var i=0;i<n;i++) weights.push(1+i); // 아래로 갈수록 비중 확대
+      var wsum = weights.reduce(function(a,b){return a+b;},0);
+      for(var i=0;i<n;i++){
+        var price = n===1 ? start : start + (floor-start)*(i/(n-1));
+        var dv = (price/fair-1)*100;
+        var dc = (price/d.price-1)*100;
+        pt += '<tr><td>'+(i+1)+'차</td><td class="num">'+fmt(price)+'원</td>'
+          + '<td class="num">'+pct(dv)+'</td>'
+          + '<td class="num">'+pct(dc)+'</td>'
+          + '<td class="num">'+Math.round(weights[i]/wsum*100)+'%</td></tr>';
+      }
+      $('pnote').textContent = LABEL[regime]+'에서는 '+n+'회로 나눠 담고, 적정주가 대비 '
+        + p.mos+'%에서 시작해 '+(p.mos+p.depth)+'%까지 내려가며 비중을 키웁니다. '
+        + '현재가가 1차 매수가보다 높으면 아직 기다리는 구간입니다.';
+    }
+    $('ptable').innerHTML = pt;
+    $('psub').textContent = LABEL[regime]+' 기준';
+
+    return {d:d, results:results, cur:cur};
+  }
+
+  function drawChart(d, results){
+    var svg = $('chart');
+    var order = ['up','flat','down'];
+    var colors = {up:'#C8342B', flat:'#A97614', down:'#1F5FBF'};
+    var all = [d.price];
+    var bands = {};
+    order.forEach(function(r){
+      var c = results[r];
+      var hiV = fairValue(d.B0, d.roeW, c.k, 1.0) / d.shares;
+      var loV = fairValue(d.B0, d.roeW, c.k, 0.5) / d.shares;
+      bands[r] = {lo:Math.min(loV,hiV), hi:Math.max(loV,hiV), base:c.fair, buy:c.fair*(1-c.p.mos/100)};
+      all.push(bands[r].lo, bands[r].hi, bands[r].buy);
+    });
+    all = all.filter(function(v){ return isFinite(v); });
+    if(!all.length){ svg.innerHTML=''; return; }
+    var min = Math.min.apply(null, all), max = Math.max.apply(null, all);
+    var pad = (max-min)*0.12 || Math.abs(max)*0.2 || 1;
+    min = Math.min(min-pad, 0); max = max+pad;
+    var L=86, R=676, W=R-L;
+    function x(v){ return L + (v-min)/(max-min)*W; }
+
+    var s = '';
+    // axis
+    s += '<line x1="'+L+'" y1="182" x2="'+R+'" y2="182" stroke="#D6DDE5" stroke-width="1"/>';
+    [min, (min+max)/2, max].forEach(function(v){
+      s += '<text x="'+x(v)+'" y="198" fill="#7B8896" font-size="10.5" text-anchor="middle">'+fmt(v)+'</text>';
+    });
+    // current price line
+    s += '<line x1="'+x(d.price)+'" y1="16" x2="'+x(d.price)+'" y2="182" stroke="#16202C" stroke-width="2" stroke-dasharray="4 3"/>';
+    s += '<text x="'+x(d.price)+'" y="12" fill="#16202C" font-size="11" font-weight="700" text-anchor="middle">현재가 '+fmt(d.price)+'</text>';
+
+    order.forEach(function(r,i){
+      var b = bands[r], y = 40 + i*44;
+      if(!isFinite(b.lo)) return;
+      s += '<text x="'+(L-10)+'" y="'+(y+5)+'" fill="#4A5966" font-size="12" font-weight="700" text-anchor="end">'+LABEL[r]+'</text>';
+      s += '<rect x="'+x(b.lo)+'" y="'+(y-9)+'" width="'+Math.max(2,x(b.hi)-x(b.lo))+'" height="18" rx="4" fill="'+colors[r]+'" opacity="0.20"/>';
+      s += '<line x1="'+x(b.base)+'" y1="'+(y-13)+'" x2="'+x(b.base)+'" y2="'+(y+13)+'" stroke="'+colors[r]+'" stroke-width="3"/>';
+      s += '<circle cx="'+x(b.buy)+'" cy="'+y+'" r="4" fill="#fff" stroke="'+colors[r]+'" stroke-width="2"/>';
+      s += '<text x="'+x(b.base)+'" y="'+(y-18)+'" fill="'+colors[r]+'" font-size="11" font-weight="700" text-anchor="middle">'+fmt(b.base)+'</text>';
+    });
+    s += '<text x="'+L+'" y="216" fill="#7B8896" font-size="10.5">막대 = w 0.5~1.0 범위 · 굵은 선 = 국면 기준 적정주가 · 원 = 매수 기준가</text>';
+    svg.innerHTML = s;
+  }
+
+  function judge(){
+    var now = parseFloat($('idxNow').value), ma = parseFloat($('idxMa').value), hi = parseFloat($('idxHigh').value);
+    if(!isFinite(now)||!isFinite(ma)||!isFinite(hi)||ma<=0||hi<=0) return;
+    var rel = now/ma - 1, dd = (hi-now)/hi;
+    var r, why;
+    if(dd >= 0.20 || rel < -0.05){ r='down'; }
+    else if(rel > 0.03 && dd < 0.10){ r='up'; }
+    else { r='flat'; }
+    why = '200일선 대비 ' + pct(rel*100) + ', 52주 최고 대비 ' + (-dd*100).toFixed(1) + '%';
+    $('judge').innerHTML = '추천 국면: <b>'+LABEL[r]+'</b> — '+why
+      + ' <button class="act ghost" id="applyJudge" style="padding:5px 11px;font-size:13px;margin-left:6px">적용</button>';
+    $('applyJudge').addEventListener('click', function(){ setRegime(r); });
+  }
+
+  function setRegime(r){
+    regime = r;
+    document.querySelectorAll('.rbtn').forEach(function(b){
+      b.setAttribute('aria-pressed', String(b.dataset.r === r));
+    });
+    render();
+  }
+
+  document.querySelectorAll('.rbtn').forEach(function(b){
+    b.addEventListener('click', function(){ setRegime(b.dataset.r); });
+  });
+
+  $('grade').addEventListener('change', function(){
+    if(this.value !== 'custom'){ $('kbase').value = this.value; render(); }
+    else { $('kbase').focus(); }
+  });
+
+  document.addEventListener('input', function(e){
+    if(e.target.matches('input, select')){
+      if(e.target.id === 'kbase') $('grade').value = 'custom';
+      if(['idxNow','idxMa','idxHigh'].indexOf(e.target.id) >= 0) judge();
+      render();
+    }
+  });
+
+  /* ── 종목 자동 불러오기 ─────────────────────────── */
+  var AUTO_IDS = ['name','price','equity','roe3','roe2','roe1','shares','treasury'];
+
+  function apiBase(){
+    var v = $('api').value.trim().replace(/\/+$/,'');
+    if(v) return v;
+    return (location.protocol === 'file:') ? '' : '';
+  }
+
+  function status(msg, kind){
+    var el = $('fstatus');
+    el.className = 'fstatus' + (kind ? ' ' + kind : '');
+    el.textContent = msg;
+  }
+
+  function setAuto(id, value){
+    if(value === null || value === undefined || value === '') return false;
+    var el = $(id);
+    el.value = value;
+    el.classList.add('auto');
+    return true;
+  }
+
+  AUTO_IDS.forEach(function(id){
+    $(id).addEventListener('input', function(){ this.classList.remove('auto'); });
+  });
+
+  function req(path){
+    var base = apiBase();
+    if(!base && location.protocol === 'file:'){
+      return Promise.reject(new Error('파일을 직접 열었을 때는 서버 주소를 넣어야 합니다.'));
+    }
+    return fetch(base + path).then(function(r){
+      return r.json().then(function(j){
+        if(!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        return j;
+      });
+    });
+  }
+
+  function loadStock(code, shownName){
+    status('불러오는 중… ' + (shownName || code), 'busy');
+    $('picker').innerHTML = '';
+    req('/api/stock/' + code).then(function(d){
+      var filled = [];
+      if(setAuto('name', d.name || code)) filled.push('종목명');
+      if(setAuto('price', d.price)) filled.push('현재가');
+      if(setAuto('equity', d.equityEok)) filled.push('자기자본');
+      if(d.roe && d.roe.length === 3){
+        if(setAuto('roe3', d.roe[0])) filled.push('3년 전 ROE');
+        if(setAuto('roe2', d.roe[1])) filled.push('2년 전 ROE');
+        if(setAuto('roe1', d.roe[2])) filled.push('전년도 ROE');
+      }
+      if(setAuto('shares', d.shares)) filled.push('발행주식수');
+      if(d.treasury !== null && d.treasury !== undefined && setAuto('treasury', d.treasury)) filled.push('자사주');
+
+      render();
+
+      var msg = filled.length ? (filled.length + '개 항목을 채웠습니다: ' + filled.join(', ') + '.') : '채운 항목이 없습니다.';
+      if(d.equityNote) msg += ' 자기자본 출처 — ' + d.equityNote + '.';
+      if(d.warnings && d.warnings.length){
+        status(msg + ' ⚠ ' + d.warnings.join(' '), 'err');
+      } else {
+        status(msg + ' 숫자는 원본과 한 번 대조해 보시고 쓰세요.');
+      }
+    }).catch(function(e){
+      status('불러오지 못했습니다 — ' + e.message + ' 값을 직접 입력하셔도 계산은 그대로 됩니다.', 'err');
+    });
+  }
+
+  function doSearch(){
+    var q = $('q').value.trim();
+    if(!q){ status('종목명이나 6자리 코드를 넣으세요.', 'err'); return; }
+    if(/^\d{6}$/.test(q)){ loadStock(q); return; }
+    status('종목을 찾는 중…', 'busy');
+    req('/api/search?q=' + encodeURIComponent(q)).then(function(list){
+      if(!list.length){ status('검색 결과가 없습니다. 6자리 종목코드를 직접 넣어 보세요.', 'err'); return; }
+      if(list.length === 1){ loadStock(list[0].code, list[0].name); return; }
+      status('어느 종목인가요?');
+      $('picker').innerHTML = list.map(function(it){
+        return '<button data-code="'+it.code+'" data-name="'+it.name+'">'+it.name+' <span style="color:#7B8896">'+it.code+'</span></button>';
+      }).join('');
+      $('picker').querySelectorAll('button').forEach(function(b){
+        b.addEventListener('click', function(){ loadStock(b.dataset.code, b.dataset.name); });
+      });
+    }).catch(function(e){
+      status('검색에 실패했습니다 — ' + e.message, 'err');
+    });
+  }
+
+  $('btnFetch').addEventListener('click', doSearch);
+  $('q').addEventListener('keydown', function(e){ if(e.key === 'Enter') doSearch(); });
+
+  $('btnAdd').addEventListener('click', function(){
+    var st = render();
+    var d = st.d, res = st.results;
+    basket.push({
+      name: d.name, price: d.price,
+      up: res.up.fair, flat: res.flat.fair, down: res.down.fair,
+      gap: d.price/st.cur.fair - 1, regime: regime
+    });
+    drawBasket();
+  });
+
+  $('btnClear').addEventListener('click', function(){
+    AUTO_IDS.forEach(function(id){ $(id).value=''; $(id).classList.remove('auto'); });
+    $('picker').innerHTML=''; status('직접 입력 모드입니다.');
+    $('name').focus(); render();
+  });
+
+  function drawBasket(){
+    if(!basket.length){ $('cmpSec').style.display='none'; return; }
+    $('cmpSec').style.display='block';
+    var h = '';
+    basket.forEach(function(b){
+      var g = b.gap*100;
+      h += '<tr><td>'+b.name+'</td><td class="num">'+fmt(b.price)+'</td>'
+        + '<td class="num">'+fmt(b.up)+'</td><td class="num">'+fmt(b.flat)+'</td><td class="num">'+fmt(b.down)+'</td>'
+        + '<td class="num '+(g<0?'down-t':'up-t')+'">'+LABEL[b.regime]+' '+pct(g)+'</td></tr>';
+    });
+    $('cmptable').innerHTML = h;
+  }
+
+  /* ── 공유 링크 ─────────────────────────────────────
+   * 입력값을 URL 쿼리에 실어 보내면, 받는 사람 화면에 그대로 채워진다.
+   * 서버에는 아무것도 저장되지 않는다 — 링크 자체가 데이터를 담고 있다.
+   */
+  var SHARE_MAP = { name:'n', price:'p', equity:'e', roe3:'r3', roe2:'r2', roe1:'r1', shares:'s', treasury:'t' };
+
+  $('btnShare').addEventListener('click', function(){
+    var sp = new URLSearchParams();
+    Object.keys(SHARE_MAP).forEach(function(id){
+      var v = $(id).value;
+      if(v !== '') sp.set(SHARE_MAP[id], v);
+    });
+    sp.set('rg', regime);
+    var url = location.origin + location.pathname + '?' + sp.toString();
+    var msg = $('shareMsg');
+    var done = function(){ msg.textContent = '링크를 복사했습니다.'; setTimeout(function(){ msg.textContent=''; }, 3000); };
+    var fail = function(){ msg.textContent = '복사에 실패했습니다. 주소창의 링크를 직접 복사하세요.'; window.history.replaceState(null,'',url); };
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(url).then(done).catch(fail);
+    } else { fail(); }
+  });
+
+  (function loadFromQuery(){
+    var sp = new URLSearchParams(location.search);
+    var any = false;
+    Object.keys(SHARE_MAP).forEach(function(id){
+      var key = SHARE_MAP[id];
+      if(sp.has(key)){ $(id).value = sp.get(key); any = true; }
+    });
+    if(sp.has('rg') && LABEL[sp.get('rg')]){
+      regime = sp.get('rg');
+      document.querySelectorAll('.rbtn').forEach(function(b){
+        b.setAttribute('aria-pressed', String(b.dataset.r === regime));
+      });
+    }
+    if(any) status('공유된 링크의 값을 불러왔습니다.');
+  })();
+
+  render();
+})();
+</script>
+</body>
+</html>
