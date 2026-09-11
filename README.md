@@ -91,7 +91,7 @@ rain-proxy 때와 같은 방식입니다.
 
 | 엔드포인트 | 설명 |
 | --- | --- |
-| `GET /api/momentum` | 조건식 스캔. 파라미터: `n`(유니버스, 기본 150) `market`(ALL/KOSPI/KOSDAQ) `barsAgo`(0=당일봉, 1=전일 확정봉) `minTurnover`(억원, 기본 30) `minPass`(최소 조건 충족 개수, 기본 3) `keywords`(쉼표 구분 테마) `weightCond`/`weightSector`/`weightVolume`/`weightKeyword` |
+| `GET /api/momentum` | 조건식 스캔. 파라미터: `n`(유니버스, 기본 150) `market`(ALL/KOSPI/KOSDAQ) `barsAgo`(0=당일봉, 1=전일 확정봉) `minTurnover`(억원, 기본 30) `minPass`(최소 조건 충족 개수, 기본 3) `keywords`(쉼표 구분 테마) `weightCond`/`weightSector`/`weightVolume`/`weightKeyword` · 적정주가: `regime`(up/flat/down) `kbase`(기준 요구수익률 %) `fairValue=0`으로 끔 |
 | `GET /api/momentum/conditions` | 현재 로드된 조건 정의와 사용 가능한 지표·판정 목록 |
 | `GET /api/ohlcv/:code` | 종목 하나의 일봉과 조건별 지표값. HTS와 값이 다를 때 대조용 |
 | `GET /api/sectors-raw` | 네이버 업종 분류 수집 결과(업종 수, 매핑된 종목 수) |

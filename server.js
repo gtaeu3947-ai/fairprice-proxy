@@ -1626,6 +1626,44 @@ function computeSectorStrength(rows, sectorByCode, minMembers) {
   return { sectors: scored, allSectors: list, strengthByName };
 }
 
+/**
+ * 최종 후보에만 적정주가를 붙인다.
+ *
+ * 재무 조회는 종목당 요청이 여러 건이라 유니버스 전체(수백~수천)에 돌리면
+ * 스캔이 몇 배로 느려진다. 순위가 정해진 뒤 상위 몇 종목에만 얹어서,
+ * 모멘텀 신호와 밸류에이션을 한 화면에서 같이 보게 하는 정도로 쓴다.
+ */
+async function attachFairValue(list, opt) {
+  if (!list.length) return list;
+  const BATCH = 3;
+  for (let i = 0; i < list.length; i += BATCH) {
+    const batch = list.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (c) => {
+      try {
+        const fund = await getFundamentals(c.code);
+        if (!fund.equityEok || !fund.shares || fund.roe.some(v => v == null)) {
+          c.fairNote = '재무 데이터 부족';
+          return;
+        }
+        const sharesOut = fund.shares - (fund.treasury || 0);
+        const fv = fairValue(fund.equityEok, fund.roe[0], fund.roe[1], fund.roe[2],
+                             opt.kbasePct, opt.regime, sharesOut);
+        if (fv.fairPrice == null) { c.fairNote = '적정주가 계산 불가'; return; }
+        c.fairPrice = Math.round(fv.fairPrice);
+        c.roeW = Math.round(fv.roeW * 100) / 100;
+        c.marginPct = Math.round((fv.roeW - fv.k * 100) * 100) / 100;
+        // 괴리율은 화면에 띄운 종가 기준으로 계산해야 카드 안에서 앞뒤가 맞는다.
+        c.gapPct = round2(gapPct(c.close, fv.fairPrice));
+        if (fv.roeW <= fv.k * 100) c.fairNote = 'ROE가 요구수익률 이하 (초과이익 없음)';
+        else if (fund.equityNote && /BPS/.test(fund.equityNote)) c.fairNote = '자기자본이 BPS 기반 추정값';
+      } catch (e) {
+        c.fairNote = '재무 조회 실패';
+      }
+    }));
+  }
+  return list;
+}
+
 async function runMomentum(opt) {
   const today = kstDate();
   const config = loadMomentumConfig();
@@ -1724,6 +1762,12 @@ async function runMomentum(opt) {
   const poolKosdaq = rankPool(rows.filter(r => r.market === 'KOSDAQ')).map(slim);
   const N = opt.topN;
 
+  const topKospi = poolKospi.slice(0, N);
+  const topKosdaq = poolKosdaq.slice(0, N);
+  if (opt.withFairValue) {
+    await attachFairValue([...topKospi, ...topKosdaq], opt);
+  }
+
   const out = {
     date: today,
     barsAgo: opt.barsAgo,
@@ -1743,11 +1787,11 @@ async function runMomentum(opt) {
     sectorTop: sectorInfo.sectors.slice(0, 8),
     sectorBottom: sectorInfo.sectors.slice(-5).reverse(),
     sectorError,
-    candidatesKospi: poolKospi.slice(0, N),
-    candidatesKosdaq: poolKosdaq.slice(0, N),
+    candidatesKospi: topKospi,
+    candidatesKosdaq: topKosdaq,
     runnerUpsKospi: poolKospi.slice(N, N + 10),
     runnerUpsKosdaq: poolKosdaq.slice(N, N + 10),
-    candidates: [...poolKospi.slice(0, N), ...poolKosdaq.slice(0, N)],
+    candidates: [...topKospi, ...topKosdaq],
     opt,
   };
 
@@ -1787,6 +1831,9 @@ app.get('/api/momentum', checkStatsAuth, async (req, res) => {
     minPassCount: Math.min(5, Math.max(0, Math.round(numParam(req.query.minPass, 3)))),
     topN: Math.min(10, Math.max(1, Math.round(numParam(req.query.topN, 3)))),
     keywords: String(req.query.keywords || '').split(/[,\s]+/).map(s => s.trim()).filter(Boolean).slice(0, 12),
+    withFairValue: req.query.fairValue !== '0',
+    regime: ['up', 'flat', 'down'].includes(req.query.regime) ? req.query.regime : 'up',
+    kbasePct: (() => { const v = numParam(req.query.kbase, 4.64); return v > 0 ? v : 4.64; })(),
     weightCond: wCond, weightSector: wSector, weightVolume: wVolume, weightKeyword: wKeyword,
   };
 
@@ -2314,7 +2361,7 @@ app.get('/api/flow/:code', checkStatsAuth, async (req, res) => {
  * "고쳤는데 왜 그대로냐"의 원인이 대부분 "아직 예전 코드가 돌고 있다"였다.
  * BUILD를 올려두면 /api/health만 열어봐도 지금 무엇이 떠 있는지 바로 알 수 있다.
  */
-const BUILD = '2026-09-11d 자기자본=BPS×주식수, 주식수 역산, 추정치(E) 제외';
+const BUILD = '2026-09-11e 모멘텀 후보에 적정주가 표시';
 
 app.get('/api/health', (_, res) => res.json({
   ok: true,
@@ -2327,6 +2374,7 @@ app.get('/api/health', (_, res) => res.json({
     universeMultiSource: true,      // 시가총액 수집 3경로
     stockBasicViaApi: true,         // 현재가·종목명을 JSON API에서 우선 수집
     financeViaApi: true,            // ROE·자기자본을 네이버 재무 API에서도 수집
+    momentumFairValue: true,        // 모멘텀 최종 후보에 적정주가 표시
     probeEndpoint: true,            // /api/probe/:code
     universeMax: 2000,
     diagEndpoint: true,             // /api/diag

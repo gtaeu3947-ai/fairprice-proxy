@@ -87,7 +87,8 @@ let requestLog = { chartApi: 0, htmlDay: 0, sectorList: 0, sectorDetail: 0 };
 
 global.fetch = async (url) => {
   const u = String(url);
-  const html = (h) => ({ ok: true, status: 200, arrayBuffer: async () => Buffer.from(h, 'utf8') });
+  // fetchHtml은 arrayBuffer를, fetchJson은 text를 쓴다 — 둘 다 갖춰야 한다.
+  const html = (h) => ({ ok: true, status: 200, arrayBuffer: async () => Buffer.from(h, 'utf8'), text: async () => h });
 
   // 시가총액 상위 목록 (sosok=0 코스피 / 1 코스닥)
   if (u.includes('sise_market_sum')) {
@@ -125,6 +126,39 @@ global.fetch = async (url) => {
     if (!s) throw new Error('알 수 없는 코드: ' + u);
     if (code === '__BROKEN__') return { ok: true, status: 200, text: async () => 'garbage' };
     return { ok: true, status: 200, text: async () => chartApiText(makeBars(s.kind, s.base, s.volume)) };
+  }
+
+  // 종목 기본정보 / 재무 API — 적정주가 계산에 쓰인다
+  if (u.includes('/api/stock/') && u.endsWith('/basic')) {
+    const code = (u.match(/\/api\/stock\/(\d{6})\//) || [])[1];
+    const s = SPEC[code];
+    return html(JSON.stringify({ stockName: s.name, closePrice: String(s.base) }));
+  }
+  if (u.includes('/api/stock/') && u.endsWith('/integration')) {
+    const code = (u.match(/\/api\/stock\/(\d{6})\//) || [])[1];
+    const s = SPEC[code];
+    // 시가총액 = 종가 × 1,000만주 → 주식수 역산이 1,000만주로 나와야 한다
+    const cap = s.base * 1e7;
+    return html(JSON.stringify({
+      stockName: s.name,
+      totalInfos: [
+        { code: 'marketValue', key: '시가총액', value: String(Math.round(cap / 1e8)) + '억원' },
+        { code: 'bps', key: 'BPS', value: String(Math.round(s.base * 0.8)) + '원' },
+      ],
+    }));
+  }
+  if (u.includes('/finance/annual')) {
+    const P = ['202312', '202412', '202512'];
+    const row = (title, vals) => ({ title, columns: P.reduce((o, p, i) => { o[p] = { value: String(vals[i]) }; return o; }, {}) });
+    return html(JSON.stringify({
+      financeInfo: {
+        trTitleList: P.map(p => ({ key: p, title: p.slice(0, 4) + '.12' })),
+        rowList: [row('ROE', [12, 14, 16]), row('BPS', [8000, 9000, 10000])],
+      },
+    }));
+  }
+  if (u.includes('item/main.naver') || u.includes('fnguide') || u.includes('/trend')) {
+    return html('<html><head><meta charset="utf-8"></head><body></body></html>');
   }
 
   // 일별시세 HTML (차트 API 실패 시 대체 경로)
@@ -186,6 +220,7 @@ function check(name, cond, detail) {
   const opt = {
     universeN: 12, market: 'ALL', barsAgo: 0,
     minTurnoverEok: 30, minPassCount: 2, topN: 3, keywords: [],
+    withFairValue: false, regime: 'up', kbasePct: 4.64,
     weightCond: 0.4, weightSector: 0.3, weightVolume: 0.2, weightKeyword: 0.1,
   };
   const r = await S.runMomentum(opt);
@@ -246,6 +281,28 @@ function check(name, cond, detail) {
   check('전일 기준 스캔도 정상 동작', prev.consideredCount === 8, prev.consideredCount);
   check('전일 기준에서는 돌파 신호가 사라짐(급등이 마지막 봉이므로)',
     prev.funnel.strict === 0, prev.funnel);
+
+  console.log('\n[8-1] 적정주가 얹기');
+  const fvRun = await S.runMomentum({ ...opt, withFairValue: true });
+  const withFv = [...fvRun.candidatesKospi, ...fvRun.candidatesKosdaq];
+  console.log('  적정주가:', JSON.stringify(withFv.map(c => ({ n: c.name, fair: c.fairPrice, gap: c.gapPct, note: c.fairNote }))));
+  check('후보마다 적정주가 또는 사유가 붙는다',
+    withFv.every(c => c.fairPrice != null || c.fairNote), withFv.map(c => ({ f: c.fairPrice, n: c.fairNote })));
+  check('적정주가가 계산된 종목이 있다', withFv.some(c => c.fairPrice > 0), withFv.map(c => c.fairPrice));
+  check('괴리율은 종가와 적정주가로 맞아떨어진다', withFv.every(c => {
+    if (c.fairPrice == null || c.gapPct == null) return true;
+    const expect = Math.round((c.close / c.fairPrice - 1) * 1000) / 10;
+    return Math.abs(c.gapPct - expect) < 0.2;
+  }), withFv.map(c => ({ close: c.close, fair: c.fairPrice, gap: c.gapPct })));
+  check('자기자본이 BPS 추정이면 그 사실을 표시',
+    withFv.filter(c => c.fairPrice != null).every(c => c.fairNote == null || /추정|초과이익/.test(c.fairNote)),
+    withFv.map(c => c.fairNote));
+
+  console.log('\n[8-2] 끄면 재무 조회를 하지 않는다');
+  const noFv = await S.runMomentum({ ...opt, withFairValue: false, topN: 2 });
+  check('적정주가 필드가 없다',
+    [...noFv.candidatesKospi, ...noFv.candidatesKosdaq].every(c => c.fairPrice === undefined),
+    noFv.candidatesKospi.map(c => c.fairPrice));
 
   console.log('\n[9] 추천 기록이 저평가 스크리너와 분리되는가');
   await S.recordRecommendation('2026-09-09', { a: 1 }, [{ code: '000001', name: '가치주', price: 100 }], 'value');
