@@ -232,6 +232,48 @@ function check(name, cond, detail) {
   check('받아온 종목 수가 유니버스보다 작거나 같음',
     r.fetchedCount <= r.universeSize, { f: r.fetchedCount, u: r.universeSize });
 
+
+console.log('\n[10] 네이버 해외 일봉 (야후·Stooq가 동시에 막혔을 때의 세 번째 경로)');
+{
+  const rows = [];
+  for (let i = 0; i < 80; i++) {
+    const d = new Date(Date.UTC(2026, 0, 1 + i));
+    rows.push({
+      localDate: d.toISOString().slice(0, 10).replace(/-/g, ''),
+      openPrice: 100 + i, highPrice: 101 + i, lowPrice: 99 + i, closePrice: 100 + i,
+      accumulatedTradingVolume: 12345,
+    });
+  }
+  const saved = global.fetch;
+  let tried = [];
+  global.fetch = async (url) => {
+    const u = String(url);
+    tried.push(u);
+    const t = JSON.stringify(u.includes('.O/') ? [] : rows);   // .O는 빈 응답, .N에서 성공
+    return { ok: true, status: 200, text: async () => t, arrayBuffer: async () => Buffer.from(t, 'utf8') };
+  };
+  const r = await US.fetchNaverForeignBars('AAPL');
+  check('접미사 후보를 순서대로 시도', tried.length >= 2, tried.length);
+  check('두 번째 후보(.N)에서 성공', r.naverSymbol === 'AAPL.N', r.naverSymbol);
+  check('80봉 파싱', r.bars.length === 80, r.bars.length);
+  check('OHLCV가 채워짐', r.bars.every(b => b.high >= b.low && b.close > 0 && b.volume > 0));
+  check('날짜가 YYYY-MM-DD로 정규화', /^\d{4}-\d{2}-\d{2}$/.test(r.bars[0].date), r.bars[0].date);
+  check('오름차순 정렬', r.bars[0].date < r.bars[79].date);
+  global.fetch = saved;
+}
+
+console.log('\n[11] 세 경로가 모두 막히면 사유를 전부 담아 던진다');
+{
+  const saved = global.fetch;
+  global.fetch = async () => ({ ok: false, status: 403, text: async () => 'Forbidden', arrayBuffer: async () => Buffer.alloc(0) });
+  let msg = null;
+  try { await US.fetchUsBars('AAPL'); } catch (e) { msg = e.message; }
+  check('야후 사유가 남는다', /yahoo/.test(msg || ''), msg);
+  check('네이버 사유가 남는다', /naver/.test(msg || ''), msg);
+  check('Stooq 사유가 남는다', /stooq/.test(msg || ''), msg);
+  global.fetch = saved;
+}
+
   console.log('\n' + (fail ? fail + '개 실패' : '전부 통과'));
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('테스트 실행 실패:', e); process.exit(1); });

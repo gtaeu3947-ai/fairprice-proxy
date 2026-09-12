@@ -169,13 +169,86 @@ async function fetchStooqBars(symbol) {
   return out;
 }
 
+/**
+ * 네이버 해외주식 일봉.
+ *
+ * 야후·Stooq가 Render 서버 IP를 막아버려서 미국장이 통째로 멈췄다(2026-09).
+ * 네이버는 국내 스크리너에서 이미 잘 응답하고 있으므로, 같은 경로로 해외 종목도
+ * 받아본다. 네이버는 로이터 방식 심볼(AAPL.O 같은 거래소 접미사)을 쓰는데
+ * 접미사가 종목마다 달라서, 후보를 순서대로 시도한다.
+ */
+async function fetchNaverForeignBars(symbol, suffixes) {
+  const cands = suffixes || ['.O', '.N', '.A', ''];
+  const errors = [];
+  for (const suf of cands) {
+    const sym = symbol + suf;
+    const url = `https://api.stock.naver.com/chart/foreign/item/${encodeURIComponent(sym)}/day`
+      + `?startDateTime=${ymdhm(-400)}&endDateTime=${ymdhm(0)}`;
+    try {
+      const res = await fetch(url, {
+        headers: { 'User-Agent': UA, Accept: 'application/json', Referer: 'https://m.stock.naver.com/' },
+      });
+      if (!res.ok) { errors.push(`${sym}: HTTP ${res.status}`); continue; }
+      const text = await res.text();
+      let j;
+      try { j = JSON.parse(text); } catch { errors.push(`${sym}: JSON 아님`); continue; }
+
+      const rows = Array.isArray(j) ? j : (j.priceInfos || j.result || j.data || []);
+      const out = [];
+      for (const r of (Array.isArray(rows) ? rows : [])) {
+        const d = String(r.localDate || r.dt || r.date || '');
+        const m = d.match(/^(\d{4})-?(\d{2})-?(\d{2})/);
+        const close = toNum(r.closePrice ?? r.close ?? r.clos);
+        const high = toNum(r.highPrice ?? r.high);
+        const low = toNum(r.lowPrice ?? r.low);
+        if (!m || close == null || high == null || low == null) continue;
+        out.push({
+          date: `${m[1]}-${m[2]}-${m[3]}`,
+          open: toNum(r.openPrice ?? r.open) ?? close,
+          high, low, close,
+          volume: toNum(r.accumulatedTradingVolume ?? r.volume) ?? 0,
+        });
+      }
+      if (out.length >= 60) {
+        out.sort((a, b) => a.date.localeCompare(b.date));
+        return { bars: out, naverSymbol: sym };
+      }
+      errors.push(`${sym}: ${out.length}봉`);
+    } catch (e) {
+      errors.push(`${sym}: ${e.message}`);
+    }
+  }
+  throw new Error('네이버 해외 일봉 실패 — ' + errors.join(' | '));
+}
+
+/** 'YYYYMMDDHHmm' (offsetDays만큼 과거) */
+function ymdhm(offsetDays) {
+  const d = new Date(Date.now() + (offsetDays || 0) * 86400000);
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}0000`;
+}
+
+/**
+ * 일봉 수집. 경로가 막히는 일이 잦아 셋을 순서대로 시도하고,
+ * 전부 실패하면 각 경로의 실패 사유를 모두 담아 던진다.
+ * (예전에는 마지막 경로의 오류만 보여줘서 진짜 원인을 알 수 없었다.)
+ */
 async function fetchUsBars(symbol) {
+  const errors = [];
   try {
     return { bars: await fetchYahooBars(symbol, '1y'), source: 'yahoo' };
-  } catch (e) {
-    const bars = await fetchStooqBars(symbol);
-    return { bars, source: 'stooq', note: '야후 실패: ' + e.message };
-  }
+  } catch (e) { errors.push('yahoo: ' + e.message); }
+
+  try {
+    const r = await fetchNaverForeignBars(symbol);
+    return { bars: r.bars, source: 'naver-foreign', naverSymbol: r.naverSymbol, note: errors.join(' | ') };
+  } catch (e) { errors.push('naver: ' + e.message); }
+
+  try {
+    return { bars: await fetchStooqBars(symbol), source: 'stooq', note: errors.join(' | ') };
+  } catch (e) { errors.push('stooq: ' + e.message); }
+
+  throw new Error(errors.join(' | '));
 }
 
 
@@ -237,6 +310,6 @@ async function fetchUsFundamentals(symbol) {
 module.exports = {
   toNum, isOrdinaryShare, toYahooSymbol, sleep,
   fetchUsScreenerRows, buildUsUniverse,
-  fetchYahooBars, fetchStooqBars, fetchUsBars,
+  fetchYahooBars, fetchStooqBars, fetchNaverForeignBars, fetchUsBars, ymdhm,
   fetchUsFundamentals, rawNum,
 };

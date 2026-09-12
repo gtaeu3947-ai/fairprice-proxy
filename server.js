@@ -2319,6 +2319,48 @@ app.get('/api/us-fundamentals-raw/:symbol', checkStatsAuth, async (req, res) => 
   }
 });
 
+/**
+ * 미국 일봉 출처 탐색기.
+ *
+ * 야후·Stooq가 동시에 막히는 일이 실제로 벌어졌다(2026-09, Render IP 차단으로 추정).
+ * 어느 경로가 살아 있는지 짐작으로 고치면 또 헛다리를 짚게 되므로,
+ * 후보를 한 번에 찔러보고 상태 코드·응답 크기·앞부분을 그대로 보여준다.
+ */
+app.get('/api/us-probe/:symbol', checkStatsAuth, async (req, res) => {
+  const sym = req.params.symbol.toUpperCase();
+  const H = { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36' };
+
+  const cands = [
+    ['yahoo-q1', `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?range=1y&interval=1d`, H],
+    ['yahoo-q2', `https://query2.finance.yahoo.com/v8/finance/chart/${sym}?range=1y&interval=1d`, H],
+    ['stooq-com', `https://stooq.com/q/d/l/?s=${sym.toLowerCase()}.us&i=d`, H],
+    ['stooq-pl', `https://stooq.pl/q/d/l/?s=${sym.toLowerCase()}.us&i=d`, H],
+    ['naver-chart-O', `https://api.stock.naver.com/chart/foreign/item/${sym}.O/day?startDateTime=${US.ymdhm(-400)}&endDateTime=${US.ymdhm(0)}`, { ...H, Referer: 'https://m.stock.naver.com/' }],
+    ['naver-chart-N', `https://api.stock.naver.com/chart/foreign/item/${sym}.N/day?startDateTime=${US.ymdhm(-400)}&endDateTime=${US.ymdhm(0)}`, { ...H, Referer: 'https://m.stock.naver.com/' }],
+    ['naver-basic-O', `https://api.stock.naver.com/stock/${sym}.O/basic`, { ...H, Referer: 'https://m.stock.naver.com/' }],
+    ['naver-worldstock', `https://api.stock.naver.com/stock/worldItem/${sym}.O/basic`, { ...H, Referer: 'https://m.stock.naver.com/' }],
+  ];
+
+  const results = await Promise.all(cands.map(async ([name, url, headers]) => {
+    const t0 = Date.now();
+    try {
+      const r = await fetch(url, { headers });
+      const text = await r.text();
+      return {
+        name, url, status: r.status, ok: r.ok, ms: Date.now() - t0, bytes: text.length,
+        // 일봉이 몇 개나 들어 있는지 대충 센다. 날짜 패턴 개수로 본다.
+        dateHits: (text.match(/\d{4}-\d{2}-\d{2}/g) || []).length
+          + (text.match(/"timestamp"\s*:\s*\[/) ? 1000 : 0),
+        head: text.slice(0, 200).replace(/\s+/g, ' '),
+      };
+    } catch (e) {
+      return { name, url, error: e.message, ms: Date.now() - t0 };
+    }
+  }));
+
+  res.json({ symbol: sym, hint: 'dateHits가 크거나 1000 이상이면 그 경로에 일봉이 들어 있습니다.', results });
+});
+
 app.get('/api/us-bars/:symbol', checkStatsAuth, async (req, res) => {
   try {
     const { bars, source, note } = await US.fetchUsBars(req.params.symbol);
@@ -2882,7 +2924,7 @@ app.get('/api/flow/:code', checkStatsAuth, async (req, res) => {
  * "고쳤는데 왜 그대로냐"의 원인이 대부분 "아직 예전 코드가 돌고 있다"였다.
  * BUILD를 올려두면 /api/health만 열어봐도 지금 무엇이 떠 있는지 바로 알 수 있다.
  */
-const BUILD = '2026-09-12e 검증된 기본값 적용';
+const BUILD = '2026-09-12f 미국 일봉 출처 탐색기';
 
 app.get('/api/health', (_, res) => res.json({
   ok: true,
