@@ -108,21 +108,21 @@
       <div class="f">
         <label for="market">시장</label>
         <select id="market">
-          <option value="ALL" selected>코스피+코스닥</option>
+          <option value="ALL">코스피+코스닥</option>
           <option value="KOSPI">코스피</option>
-          <option value="KOSDAQ">코스닥</option>
+          <option value="KOSDAQ" selected>코스닥</option>
           <option value="US">미국</option>
         </select>
       </div>
       <div class="f">
         <label for="n">종목 수</label>
-        <input id="n" type="number" value="40" min="5" max="200" step="10">
-        <span class="hint">40종목이면 1~2분</span>
+        <input id="n" type="number" value="150" min="5" max="200" step="10">
+        <span class="hint">150종목이면 2~3분</span>
       </div>
       <div class="f">
         <label for="krDays">국내 기간 (일)</label>
-        <input id="krDays" type="number" value="1100" min="300" max="1800" step="100">
-        <span class="hint">1100이면 약 3년</span>
+        <input id="krDays" type="number" value="1800" min="300" max="1800" step="100">
+        <span class="hint">1800이면 약 5년 (하락장 포함)</span>
       </div>
       <div class="f">
         <label for="range">미국 기간</label>
@@ -142,8 +142,8 @@
     <div class="grid">
       <div class="f">
         <label for="pullback">눌림 대기 (%)</label>
-        <input id="pullback" type="number" value="0" step="0.5" min="0" max="20">
-        <span class="hint">0 = 바로 매수 · 3이면 종가 −3%에 지정가</span>
+        <input id="pullback" type="number" value="5" step="0.5" min="0" max="20">
+        <span class="hint">0 = 바로 매수 · 5이면 종가 −5%에 지정가 (검증 결과 최적)</span>
       </div>
       <div class="f">
         <label for="pullbackWait">최대 대기 (거래일)</label>
@@ -188,11 +188,11 @@
     <div class="grid">
       <div class="f">
         <label for="target">목표 수익률 (%)</label>
-        <input id="target" type="number" value="7" step="0.5" min="0.5">
+        <input id="target" type="number" value="6" step="0.5" min="0.5">
       </div>
       <div class="f">
         <label for="stop">손절폭 (%)</label>
-        <input id="stop" type="number" value="5" step="0.5" min="0.5">
+        <input id="stop" type="number" value="6" step="0.5" min="0.5">
       </div>
       <div class="f">
         <label for="hold">최대 보유 (거래일)</label>
@@ -494,7 +494,7 @@
     }).join('');
   }
 
-  var PAGE_VERSION = '2026-09-12d';
+  var PAGE_VERSION = '2026-09-12e';
   fetch('/api/health').then(function(r){ return r.json(); }).then(function(j){
     var same = j.build && j.build.indexOf(PAGE_VERSION) === 0;
     $('buildInfo').innerHTML = '화면 ' + PAGE_VERSION + ' · 서버 ' + esc(j.build || '(표시 없음)')

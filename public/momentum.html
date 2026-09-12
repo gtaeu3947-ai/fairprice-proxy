@@ -243,6 +243,40 @@
   </div>
 </section>
 
+<section>
+  <div class="stitle"><h2>실전 매매법</h2><span>백테스트로 확정한 규칙</span></div>
+  <div class="panel">
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+      <tbody>
+        <tr><td style="padding:9px 0;border-bottom:1px solid var(--line-2);color:var(--ink-2);width:32%">매수</td>
+            <td style="padding:9px 0;border-bottom:1px solid var(--line-2)"><b>신호일 종가 −5%</b>에 지정가</td></tr>
+        <tr><td style="padding:9px 0;border-bottom:1px solid var(--line-2);color:var(--ink-2)">대기</td>
+            <td style="padding:9px 0;border-bottom:1px solid var(--line-2)">최대 <b>3거래일</b>. 안 닿으면 주문 취소, 그 종목은 버림</td></tr>
+        <tr><td style="padding:9px 0;border-bottom:1px solid var(--line-2);color:var(--ink-2)">매도(익절)</td>
+            <td style="padding:9px 0;border-bottom:1px solid var(--line-2)">매수가 <b>+6%</b></td></tr>
+        <tr><td style="padding:9px 0;border-bottom:1px solid var(--line-2);color:var(--ink-2)">매도(손절)</td>
+            <td style="padding:9px 0;border-bottom:1px solid var(--line-2)">매수가 <b>−6%</b> — 예외 없이</td></tr>
+        <tr><td style="padding:9px 0;border-bottom:1px solid var(--line-2);color:var(--ink-2)">기간 만료</td>
+            <td style="padding:9px 0;border-bottom:1px solid var(--line-2)"><b>10거래일</b> 지나면 종가에 정리</td></tr>
+        <tr><td style="padding:9px 0;color:var(--ink-2)">분할매수</td>
+            <td style="padding:9px 0"><b>하지 않음</b> — 물타기 뒤에도 못 살아난 거래가 68%였음</td></tr>
+      </tbody>
+    </table>
+
+    <p class="note" style="margin-top:14px">
+      <b>근거</b> — 코스닥 시총 상위 150종목, 2021~2026년 5년(하락장 포함), 신호 265건 기준.
+      평균 +1.91%, 목표 도달 64.5%, 손절 32.5%, 진입률 40.3%.
+      −10% 넘게 잃은 거래는 <b>0건</b>이었습니다. 수수료·세금·슬리피지를 빼면 실제 기대치는 <b>건당 +1.2~1.5%</b> 정도로 보십시오.
+    </p>
+    <p class="note" style="color:var(--ink-3)">
+      30분봉 일목 기준선이 −5%보다 위에 있으면 그쪽이 먼저 닿습니다. 기존 방식과 크게 다르지 않고,
+      달라진 것은 “얼마나 기다릴지”에 숫자 근거가 생겼다는 점입니다.
+      손절 6%가 위 결과에서 큰 손실을 막은 유일한 장치이므로, 이것만은 지키십시오.
+      규칙을 바꾸고 싶으면 감이 아니라 <a href="backtest.html">백테스트</a>에서 먼저 확인하십시오.
+    </p>
+  </div>
+</section>
+
 <section id="marketSec" style="display:none">
   <div class="stitle"><h2>시장 국면과 강한 섹터</h2><span id="marketMeta"></span></div>
   <div class="panel">
@@ -639,7 +673,7 @@
 
   /* 화면 파일과 서버가 같은 판인지 한눈에 보이게 한다.
      둘이 다르면 배포가 반만 됐거나 브라우저가 예전 HTML을 들고 있는 것이다. */
-  var PAGE_VERSION = '2026-09-12b';
+  var PAGE_VERSION = '2026-09-12e';
   fetch('/api/health').then(function(r){ return r.json(); }).then(function(j){
     var same = j.build && j.build.indexOf(PAGE_VERSION) === 0;
     $('buildInfo').innerHTML = '화면 ' + PAGE_VERSION + ' · 서버 ' + esc(j.build || '(표시 없음)')
