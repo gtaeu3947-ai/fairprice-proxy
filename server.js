@@ -2206,20 +2206,20 @@ app.get('/api/backtest', checkStatsAuth, async (req, res) => {
     return Number.isFinite(n) ? n : def;
   };
   const market = ['KOSPI', 'KOSDAQ', 'ALL', 'US'].includes(req.query.market) ? req.query.market : 'ALL';
-  const krDays = Math.min(1800, Math.max(300, Math.round(num(req.query.krDays, 1100))));
+  const krDays = Math.min(1800, Math.max(300, Math.round(num(req.query.krDays, 1800))));
 
   const opt = {
     market,
-    universeN: Math.min(200, Math.max(5, Math.round(num(req.query.n, 40)))),
+    universeN: Math.min(200, Math.max(5, Math.round(num(req.query.n, 150)))),
     useBaseConditions: req.query.base !== '0',
     filters: String(req.query.filters || '').split(',').map(s => s.trim()).filter(Boolean),
     holdDays: Math.min(40, Math.max(1, Math.round(num(req.query.hold, 10)))),
-    targetPct: Math.max(0.5, num(req.query.target, 7)),
-    stopPct: Math.max(0.5, num(req.query.stop, 5)),
+    targetPct: Math.max(0.5, num(req.query.target, 6)),
+    stopPct: Math.max(0.5, num(req.query.stop, 6)),
     minPassCount: Math.max(1, Math.round(num(req.query.minPass, 99))),   // 기본은 전부 충족
     warmupBars: Math.min(200, Math.max(60, Math.round(num(req.query.warmup, 80)))),
     // 눌림목 진입: 0이면 예전처럼 다음 봉 시가에 바로 산다.
-    pullbackPct: Math.max(0, num(req.query.pullback, 0)),
+    pullbackPct: Math.max(0, num(req.query.pullback, 5)),
     pullbackWaitBars: Math.min(10, Math.max(1, Math.round(num(req.query.pullbackWait, 3)))),
     // 분할매수: 0이면 1회 매수. 값을 주면 진입가 대비 그만큼 빠질 때 나머지를 더 산다.
     addOnDropPct: Math.max(0, num(req.query.addOn, 0)),
@@ -2882,7 +2882,7 @@ app.get('/api/flow/:code', checkStatsAuth, async (req, res) => {
  * "고쳤는데 왜 그대로냐"의 원인이 대부분 "아직 예전 코드가 돌고 있다"였다.
  * BUILD를 올려두면 /api/health만 열어봐도 지금 무엇이 떠 있는지 바로 알 수 있다.
  */
-const BUILD = '2026-09-12d 분할매수 백테스트';
+const BUILD = '2026-09-12e 검증된 기본값 적용';
 
 app.get('/api/health', (_, res) => res.json({
   ok: true,
