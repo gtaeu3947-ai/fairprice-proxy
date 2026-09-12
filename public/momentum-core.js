@@ -226,6 +226,93 @@
     return closes.map((c, i) => (a[i] == null || !(c > 0)) ? null : (a[i] / c) * 100);
   }
 
+  /**
+   * 일목균형표(9, 26, 52).
+   *   전환선 = 최근 9봉 (최고가+최저가)/2
+   *   기준선 = 최근 26봉 (최고가+최저가)/2
+   *   선행스팬1 = (전환선+기준선)/2 를 26봉 앞으로
+   *   선행스팬2 = 최근 52봉 (최고가+최저가)/2 를 26봉 앞으로
+   *
+   * 여기서 내는 선행스팬은 "현재 봉 자리에 그려지는 구름"이다.
+   * 즉 26봉 전에 계산된 값을 현재 인덱스에 놓는다 — 차트에서 눈으로 보는 그 구름과 같다.
+   */
+  function ichimoku(highs, lows, opt) {
+    opt = opt || {};
+    const p1 = opt.tenkan || 9, p2 = opt.kijun || 26, p3 = opt.span || 52;
+    const shift = opt.shift || 26;
+    const n = highs.length;
+    const mid = (len) => {
+      const out = new Array(n).fill(null);
+      for (let i = len - 1; i < n; i++) {
+        let hh = -Infinity, ll = Infinity;
+        for (let j = i - len + 1; j <= i; j++) {
+          if (highs[j] > hh) hh = highs[j];
+          if (lows[j] < ll) ll = lows[j];
+        }
+        out[i] = (hh + ll) / 2;
+      }
+      return out;
+    };
+    const tenkan = mid(p1);
+    const kijun = mid(p2);
+    const base52 = mid(p3);
+
+    const spanA = new Array(n).fill(null);
+    const spanB = new Array(n).fill(null);
+    for (let i = 0; i < n; i++) {
+      const src = i - shift;
+      if (src < 0) continue;
+      if (tenkan[src] != null && kijun[src] != null) spanA[i] = (tenkan[src] + kijun[src]) / 2;
+      if (base52[src] != null) spanB[i] = base52[src];
+    }
+    return { tenkan, kijun, spanA, spanB };
+  }
+
+  /** a ÷ b × 100. 100이면 같은 자리. 비율로 만들어야 고정 숫자와 비교할 수 있다. */
+  function ratioTo(a, b) {
+    return a.map((v, i) => (v == null || b[i] == null || b[i] <= 0) ? null : (v / b[i]) * 100);
+  }
+
+  /**
+   * n봉 최고가가 몇 봉 전에 만들어졌는가. 0이면 오늘이 신고가.
+   * "20봉 이내에 120봉 신고가 발생"은 이 값이 20 이하인지로 본다.
+   */
+  function newHighAge(highs, n) {
+    const out = new Array(highs.length).fill(null);
+    for (let i = n - 1; i < highs.length; i++) {
+      let hh = -Infinity, at = i;
+      for (let j = i - n + 1; j <= i; j++) {
+        if (highs[j] >= hh) { hh = highs[j]; at = j; }
+      }
+      out[i] = i - at;
+    }
+    return out;
+  }
+
+  /** 최근 n봉 중 최대 거래대금(백만 단위). "20봉 이내 거래대금 500억 이상 1회"용. */
+  function maxTurnoverInM(closes, volumes, n) {
+    const t = closes.map((c, i) => (c || 0) * (volumes[i] || 0) / 1e6);
+    const out = new Array(closes.length).fill(null);
+    for (let i = n - 1; i < closes.length; i++) {
+      let mx = -Infinity;
+      for (let j = i - n + 1; j <= i; j++) if (t[j] > mx) mx = t[j];
+      out[i] = mx;
+    }
+    return out;
+  }
+
+  /** 최근 n봉 중 전봉 대비 거래량 최대 비율(%). "전봉거래량대비 500% 이상 1회"용. */
+  function maxVolumeSurgeIn(volumes, n) {
+    const r = volumes.map((v, i) => (i === 0 || !(volumes[i - 1] > 0)) ? null : (v / volumes[i - 1]) * 100);
+    const out = new Array(volumes.length).fill(null);
+    for (let i = n; i < volumes.length; i++) {
+      let mx = -Infinity;
+      for (let j = i - n + 1; j <= i; j++) if (r[j] != null && r[j] > mx) mx = r[j];
+      out[i] = mx === -Infinity ? null : mx;
+    }
+    return out;
+  }
+
   /** 당일 거래량 ÷ 직전 n일 평균 거래량. */
   function volumeRatioSeries(volumes, n) {
     n = n || 20;
@@ -259,11 +346,37 @@
     drawdown:    (b, p) => drawdownFromHigh(b.high, b.close, p.n || 60),
     dayChange:   (b) => dayChange(b.close),
     atrPct:      (b, p) => atrPct(b.high, b.low, b.close, p.n || 14),
+
+    // ── 일목균형표 계열. 전부 "종가(또는 저가·시가) ÷ 선 × 100" 비율로 낸다.
+    tenkan:      (b, p) => ichimoku(b.high, b.low, p).tenkan,
+    kijun:       (b, p) => ichimoku(b.high, b.low, p).kijun,
+    spanA:       (b, p) => ichimoku(b.high, b.low, p).spanA,
+    spanB:       (b, p) => ichimoku(b.high, b.low, p).spanB,
+    closeVsTenkan: (b, p) => ratioTo(b.close, ichimoku(b.high, b.low, p).tenkan),
+    closeVsKijun:  (b, p) => ratioTo(b.close, ichimoku(b.high, b.low, p).kijun),
+    lowVsKijun:    (b, p) => ratioTo(b.low, ichimoku(b.high, b.low, p).kijun),
+    openVsKijun:   (b, p) => ratioTo(b.open || b.close, ichimoku(b.high, b.low, p).kijun),
+    closeVsSpanA:  (b, p) => ratioTo(b.close, ichimoku(b.high, b.low, p).spanA),
+    closeVsSpanB:  (b, p) => ratioTo(b.close, ichimoku(b.high, b.low, p).spanB),
+
+    // ── 그 밖
+    candleBody:    (b) => b.close.map((c, i) => (!(b.open[i] > 0)) ? null : (c / b.open[i]) * 100),
+    newHighAge:    (b, p) => newHighAge(b.high, p.n || 120),
+    maxTurnoverM:  (b, p) => maxTurnoverInM(b.close, b.volume, p.n || 20),
+    maxVolumeSurge:(b, p) => maxVolumeSurgeIn(b.volume, p.n || 20),
   };
 
   /* ───────────────────────── 판정 ───────────────────────── */
 
-  function testCondition(series, i, cond) {
+  /**
+   * 조건 하나를 판정한다.
+   *
+   * cond.offset  — "2봉전" 같은 과거 시점 판정. i에서 그만큼 뒤로 가서 본다.
+   * cond.tol     — within 판정의 허용폭. "기준선 근접률 1% 이내"는 level:100, tol:1.
+   */
+  function testCondition(series, i0, cond) {
+    const i = i0 - (cond.offset || 0);
+    if (i < 0) return false;
     const now = series[i];
     if (now == null || !isFinite(now)) return false;
     const type = cond.type || 'above';
@@ -272,6 +385,8 @@
 
     if (type === 'above') return now >= level;
     if (type === 'below') return now <= level;
+    // 근접: 목표값에서 tol 이내에 들어와 있는가 (기준선 근접률 1% 이내 등)
+    if (type === 'within') return Math.abs(now - level) <= (cond.tol == null ? 1 : cond.tol);
 
     if (type === 'crossUp' || type === 'crossDown') {
       if (i < 1) return false;
@@ -345,15 +460,28 @@
     const conds = {};
     const values = {};
     let unknown = null;
-    conditions.forEach(c => {
+
+    /** 조건 하나 또는 any(OR) 묶음을 판정한다. */
+    const run = (c) => {
+      if (Array.isArray(c.any) && c.any.length) {
+        // (B or C or D) 처럼 여럿 중 하나만 맞으면 되는 묶음
+        return c.any.some(sub => {
+          const s = seriesFor(sub.indicator, sub.params);
+          if (!s) { unknown = unknown || sub.indicator; return false; }
+          return testCondition(s, i, sub);
+        });
+      }
       const s = seriesFor(c.indicator, c.params);
-      if (!s) { conds[c.key] = false; unknown = unknown || c.indicator; return; }
-      conds[c.key] = testCondition(s, i, c);
+      if (!s) { unknown = unknown || c.indicator; return false; }
+      const at = i - (c.offset || 0);
       values[c.key] = {
-        now: s[i] == null ? null : Math.round(s[i] * 100) / 100,
-        prev: (i > 0 && s[i - 1] != null) ? Math.round(s[i - 1] * 100) / 100 : null,
+        now: (s[at] == null) ? null : Math.round(s[at] * 100) / 100,
+        prev: (at > 0 && s[at - 1] != null) ? Math.round(s[at - 1] * 100) / 100 : null,
       };
-    });
+      return testCondition(s, i, c);
+    };
+
+    conditions.forEach(c => { conds[c.key] = run(c); });
     const keys = conditions.map(c => c.key);
     const passCount = keys.filter(k => conds[k]).length;
 
@@ -420,7 +548,11 @@
     };
 
     const keys = conditions.map(c => c.key);
-    const series = conditions.map(c => seriesFor(c.indicator, c.params));
+    // any(OR) 묶음은 하위 조건마다 시계열이 필요하다.
+    const prepared = conditions.map(c => Array.isArray(c.any) && c.any.length
+      ? { any: c.any.map(sub => ({ cond: sub, series: seriesFor(sub.indicator, sub.params) })) }
+      : { cond: c, series: seriesFor(c.indicator, c.params) });
+
     const passCount = new Array(n).fill(0);
     const strict = new Array(n).fill(false);
     const perCond = {};
@@ -429,8 +561,10 @@
     for (let i = 0; i < n; i++) {
       let cnt = 0;
       conditions.forEach((c, ci) => {
-        const s = series[ci];
-        const ok = s ? testCondition(s, i, c) : false;
+        const p = prepared[ci];
+        const ok = p.any
+          ? p.any.some(x => x.series ? testCondition(x.series, i, x.cond) : false)
+          : (p.series ? testCondition(p.series, i, p.cond) : false);
         perCond[c.key][i] = ok;
         if (ok) cnt++;
       });
@@ -443,6 +577,7 @@
   return {
     sma, ema, cci, macd, obv, obvRatio, williamsR, rsi, volumeRatioSeries,
     rollingHigh, rollingLow, closeVsMa, closeVsHigh, drawdownFromHigh, dayChange, atrPct,
+    ichimoku, ratioTo, newHighAge, maxTurnoverInM, maxVolumeSurgeIn,
     INDICATORS, testCondition, evaluate, evaluateSeries, percentileRanks, trailingMean,
   };
 });
