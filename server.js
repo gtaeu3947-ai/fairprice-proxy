@@ -2128,7 +2128,9 @@ async function runBacktest(opt) {
               const key = 'us-ohlcv-long:' + item.code + ':' + opt.yahooRange;
               let g = histCacheGet(key);
               if (!g) {
-                g = { bars: await US.fetchYahooBars(item.code, opt.yahooRange), source: 'yahoo' };
+                // 야후가 막히면 네이버·Stooq로 넘어가도록 공통 경로를 쓴다.
+                // 예전에는 여기서 야후만 직접 불러서, 스크리너는 되는데 백테스트만 죽었다.
+                g = await US.fetchUsBars(item.code, opt.yahooRange);
                 histCacheSet(key, g);
               }
               return g;
@@ -2924,7 +2926,7 @@ app.get('/api/flow/:code', checkStatsAuth, async (req, res) => {
  * "고쳤는데 왜 그대로냐"의 원인이 대부분 "아직 예전 코드가 돌고 있다"였다.
  * BUILD를 올려두면 /api/health만 열어봐도 지금 무엇이 떠 있는지 바로 알 수 있다.
  */
-const BUILD = '2026-09-12f 미국 일봉 출처 탐색기';
+const BUILD = '2026-09-12g 미국 백테스트·적정주가 대체경로';
 
 app.get('/api/health', (_, res) => res.json({
   ok: true,

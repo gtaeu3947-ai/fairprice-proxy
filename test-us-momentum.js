@@ -274,6 +274,58 @@ console.log('\n[11] 세 경로가 모두 막히면 사유를 전부 담아 던�
   global.fetch = saved;
 }
 
+
+console.log('\n[12] 백테스트도 같은 대체 경로를 쓴다 (야후만 부르면 안 됨)');
+{
+  const saved = global.fetch;
+  let sawNaver = false;
+  global.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('yahoo')) return { ok: false, status: 429, text: async () => 'Too Many Requests', arrayBuffer: async () => Buffer.alloc(0) };
+    if (u.includes('api.stock.naver.com/chart/foreign')) {
+      sawNaver = true;
+      const rows = [];
+      for (let i = 0; i < 90; i++) {
+        const d = new Date(Date.UTC(2026, 0, 1 + i));
+        rows.push({ localDate: d.toISOString().slice(0, 10).replace(/-/g, ''),
+          openPrice: 100, highPrice: 101, lowPrice: 99, closePrice: 100, accumulatedTradingVolume: 1000 });
+      }
+      const t = JSON.stringify(rows);
+      return { ok: true, status: 200, text: async () => t, arrayBuffer: async () => Buffer.from(t, 'utf8') };
+    }
+    return { ok: false, status: 403, text: async () => '', arrayBuffer: async () => Buffer.alloc(0) };
+  };
+  const got = await US.fetchUsBars('AAPL', '5y');
+  check('야후 429여도 일봉을 확보', got.bars.length === 90, got.bars.length);
+  check('네이버로 넘어갔다', sawNaver && got.source === 'naver-foreign', got.source);
+  check('야후 실패 사유가 기록됨', /429/.test(got.note || ''), got.note);
+  global.fetch = saved;
+}
+
+console.log('\n[13] 미국 재무도 네이버로 대체된다');
+{
+  const saved = global.fetch;
+  global.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('quoteSummary')) return { ok: false, status: 401, text: async () => '', arrayBuffer: async () => Buffer.alloc(0) };
+    if (u.includes('api.stock.naver.com/stock/')) {
+      const body = JSON.stringify({
+        stockName: '애플', reutersCode: 'AAPL.O',
+        totalInfos: [{ code: 'bps', key: 'BPS', value: '4.32' }, { code: 'roe', key: 'ROE', value: '149.8' }],
+        sharesOutstanding: '14840000000',
+      });
+      return { ok: true, status: 200, text: async () => body, arrayBuffer: async () => Buffer.from(body, 'utf8') };
+    }
+    return { ok: false, status: 404, text: async () => '', arrayBuffer: async () => Buffer.alloc(0) };
+  };
+  const f = await US.fetchUsFundamentals('AAPL');
+  check('BPS를 읽음', f.bps === 4.32, f.bps);
+  check('ROE를 읽음', f.roePct === 149.8, f.roePct);
+  check('주식수를 읽음', f.shares === 14840000000, f.shares);
+  check('자기자본이 계산됨', Math.abs(f.equityUsd - 4.32 * 14840000000) < 1, f.equityUsd);
+  global.fetch = saved;
+}
+
   console.log('\n' + (fail ? fail + '개 실패' : '전부 통과'));
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('테스트 실행 실패:', e); process.exit(1); });

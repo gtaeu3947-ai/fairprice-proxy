@@ -177,13 +177,14 @@ async function fetchStooqBars(symbol) {
  * 받아본다. 네이버는 로이터 방식 심볼(AAPL.O 같은 거래소 접미사)을 쓰는데
  * 접미사가 종목마다 달라서, 후보를 순서대로 시도한다.
  */
-async function fetchNaverForeignBars(symbol, suffixes) {
+async function fetchNaverForeignBars(symbol, suffixes, days) {
   const cands = suffixes || ['.O', '.N', '.A', ''];
+  const back = days || 400;
   const errors = [];
   for (const suf of cands) {
     const sym = symbol + suf;
     const url = `https://api.stock.naver.com/chart/foreign/item/${encodeURIComponent(sym)}/day`
-      + `?startDateTime=${ymdhm(-400)}&endDateTime=${ymdhm(0)}`;
+      + `?startDateTime=${ymdhm(-back)}&endDateTime=${ymdhm(0)}`;
     try {
       const res = await fetch(url, {
         headers: { 'User-Agent': UA, Accept: 'application/json', Referer: 'https://m.stock.naver.com/' },
@@ -233,14 +234,15 @@ function ymdhm(offsetDays) {
  * 전부 실패하면 각 경로의 실패 사유를 모두 담아 던진다.
  * (예전에는 마지막 경로의 오류만 보여줘서 진짜 원인을 알 수 없었다.)
  */
-async function fetchUsBars(symbol) {
+async function fetchUsBars(symbol, range) {
   const errors = [];
+  const days = ({ '1y': 400, '2y': 760, '5y': 1850, '10y': 3700 })[range] || 400;
   try {
-    return { bars: await fetchYahooBars(symbol, '1y'), source: 'yahoo' };
+    return { bars: await fetchYahooBars(symbol, range || '1y'), source: 'yahoo' };
   } catch (e) { errors.push('yahoo: ' + e.message); }
 
   try {
-    const r = await fetchNaverForeignBars(symbol);
+    const r = await fetchNaverForeignBars(symbol, null, days);
     return { bars: r.bars, source: 'naver-foreign', naverSymbol: r.naverSymbol, note: errors.join(' | ') };
   } catch (e) { errors.push('naver: ' + e.message); }
 
@@ -273,6 +275,71 @@ function rawNum(v) {
  * 결과적으로 "최근 ROE가 그대로 유지된다"는 가정이 되므로, 실적 변동이 큰
  * 기업에서는 한국장 탭보다 신뢰도가 떨어진다.
  */
+/**
+ * 네이버 해외종목 기본정보에서 BPS·ROE·주식수를 찾는다.
+ *
+ * 야후 quoteSummary가 401/429로 막혀 적정주가가 전부 "재무 조회 실패"로 나왔다.
+ * 네이버 쪽은 응답하고 있으므로 같은 값을 여기서 찾아본다.
+ * 응답 구조를 특정하지 않고 키 이름·라벨 패턴으로 훑는다 — 판이 바뀌어도 버티게.
+ */
+function findNumberDeep(node, keyRe, depth) {
+  if (node == null || (depth || 0) > 7) return null;
+  if (Array.isArray(node)) {
+    for (const v of node) {
+      const r = findNumberDeep(v, keyRe, (depth || 0) + 1);
+      if (r != null) return r;
+    }
+    return null;
+  }
+  if (typeof node !== 'object') return null;
+
+  for (const [k, v] of Object.entries(node)) {
+    if (keyRe.test(k) && (typeof v === 'string' || typeof v === 'number')) {
+      const n = toNum(v);
+      if (n != null) return n;
+    }
+  }
+  // { key: "BPS", value: "4.32" } 같은 목록형
+  const label = [node.code, node.key, node.title, node.name].find(v => typeof v === 'string');
+  if (label && keyRe.test(label)) {
+    const n = toNum(node.value ?? node.currentValue);
+    if (n != null) return n;
+  }
+  for (const v of Object.values(node)) {
+    if (v && typeof v === 'object') {
+      const r = findNumberDeep(v, keyRe, (depth || 0) + 1);
+      if (r != null) return r;
+    }
+  }
+  return null;
+}
+
+async function fetchNaverUsFundamentals(symbol) {
+  const errors = [];
+  for (const suf of ['.O', '.N', '.A']) {
+    const url = `https://api.stock.naver.com/stock/${symbol}${suf}/basic`;
+    try {
+      const res = await fetch(url, {
+        headers: { 'User-Agent': UA, Accept: 'application/json', Referer: 'https://m.stock.naver.com/' },
+      });
+      if (!res.ok) { errors.push(`${suf}: HTTP ${res.status}`); continue; }
+      const j = JSON.parse(await res.text());
+      const bps = findNumberDeep(j, /^bps$|주당순자산/i, 0);
+      const roePct = findNumberDeep(j, /^roe$/i, 0);
+      const shares = findNumberDeep(j, /listed.*(share|stock).*(count|cnt)|상장주식수|sharesOutstanding/i, 0);
+      if (bps == null && roePct == null) { errors.push(`${suf}: BPS·ROE 없음`); continue; }
+      return {
+        sourceUrl: url, bps, shares, roePct,
+        equityUsd: (bps != null && shares != null) ? bps * shares : null,
+        roeIsTrailingOnly: true,
+      };
+    } catch (e) {
+      errors.push(`${suf}: ${e.message}`);
+    }
+  }
+  throw new Error('네이버 해외 재무 실패 — ' + errors.join(' | '));
+}
+
 async function fetchUsFundamentals(symbol) {
   const modules = 'defaultKeyStatistics,financialData,price';
   const hosts = ['query2.finance.yahoo.com', 'query1.finance.yahoo.com'];
@@ -304,12 +371,17 @@ async function fetchUsFundamentals(symbol) {
       lastErr = e;
     }
   }
-  throw lastErr || new Error('재무를 읽지 못했습니다');
+  // 야후가 전부 막혔으면 네이버로 넘어간다.
+  try {
+    return await fetchNaverUsFundamentals(symbol);
+  } catch (e) {
+    throw new Error('yahoo: ' + (lastErr ? lastErr.message : '실패') + ' | ' + e.message);
+  }
 }
 
 module.exports = {
   toNum, isOrdinaryShare, toYahooSymbol, sleep,
   fetchUsScreenerRows, buildUsUniverse,
   fetchYahooBars, fetchStooqBars, fetchNaverForeignBars, fetchUsBars, ymdhm,
-  fetchUsFundamentals, rawNum,
+  fetchUsFundamentals, fetchNaverUsFundamentals, findNumberDeep, rawNum,
 };
