@@ -1553,8 +1553,19 @@ async function fetchOhlcv(code, calendarDays) {
  * 응답: { groups: [{ no, name, totalCount, changeRate, riseCount, fallCount }] }
  */
 async function fetchSectorListApi() {
-  const j = await fetchJson('https://m.stock.naver.com/api/stocks/industry?page=1&pageSize=100');
-  const groups = j?.groups || j?.result?.groups || [];
+  // 파라미터를 붙이면 404가 났다. 탐색에서 200을 낸 형태 그대로 부른다.
+  const urls = [
+    'https://m.stock.naver.com/api/stocks/industry',
+    'https://m.stock.naver.com/api/stocks/industry?page=1',
+  ];
+  let j = null, lastErr = null;
+  for (const u of urls) {
+    try { j = await fetchJson(u); break; }
+    catch (e) { lastErr = e; }
+  }
+  if (!j) throw lastErr || new Error('업종 API 호출 실패');
+
+  const groups = j?.groups || j?.result?.groups || j?.industries || [];
   if (!Array.isArray(groups) || !groups.length) throw new Error('업종 API에서 groups를 찾지 못했습니다');
   return groups
     .filter(g => g && g.no != null && g.name)
@@ -1568,8 +1579,18 @@ async function fetchSectorListApi() {
 
 /** 업종별 구성종목을 API에서 받는다. */
 async function fetchSectorMembersApi(no) {
-  const j = await fetchJson(`https://m.stock.naver.com/api/stocks/industry/${no}?page=1&pageSize=200`);
-  const list = j?.stocks || j?.result?.stocks || j?.items || [];
+  // 목록 API와 마찬가지로 파라미터 유무에 따라 404가 날 수 있어 순서대로 시도한다.
+  const urls = [
+    `https://m.stock.naver.com/api/stocks/industry/${no}`,
+    `https://m.stock.naver.com/api/stocks/industry/${no}?page=1`,
+    `https://m.stock.naver.com/api/stocks/industry/${no}?page=1&pageSize=200`,
+  ];
+  let j = null;
+  for (const u of urls) {
+    try { j = await fetchJson(u); break; } catch { /* 다음 형태로 */ }
+  }
+  if (!j) return [];
+  const list = j?.stocks || j?.result?.stocks || j?.items || j?.stockList || [];
   const out = [];
   (Array.isArray(list) ? list : []).forEach(x => {
     const code = String(x.itemCode || x.code || x.reutersCode || '').match(/\d{6}/);
@@ -2783,6 +2804,10 @@ app.get('/api/us-fin-probe/:symbol', checkStatsAuth, async (req, res) => {
    * 다 나오므로 데이터는 분명히 있다. 앞서 찍어본 주소가 전부 404였으므로,
    * 일봉이 실제로 동작하는 chart/foreign 계열을 기준으로 이웃 경로를 훑는다. */
   const cands = [
+    // 먼저 심볼 형식을 확인한다. 일봉이 되는 경로에서 reutersCode를 확인하면
+    // 재무 경로에 어떤 심볼을 써야 하는지 알 수 있다.
+    ['chart-day(형식확인)', `https://api.stock.naver.com/chart/foreign/item/${sym}.O/day?startDateTime=${US.ymdhm(-10)}&endDateTime=${US.ymdhm(0)}`],
+    ['search', `https://m.stock.naver.com/api/search/stock?query=${sym}`],
     ['stock-basic', `https://api.stock.naver.com/stock/${sym}.O/basic`],
     ['stock-integration', `https://api.stock.naver.com/stock/${sym}.O/integration`],
     ['stock-total', `https://api.stock.naver.com/stock/${sym}.O/total`],
@@ -2828,12 +2853,21 @@ app.get('/api/us-fin-probe/:symbol', checkStatsAuth, async (req, res) => {
 
 app.get('/api/sectors-raw', checkStatsAuth, async (req, res) => {
   try {
+    // 어느 단계에서 끊겼는지 같이 보여준다. source만으로는 원인을 알 수 없었다.
+    let apiGroups = null, apiError = null, memberSample = null;
+    try {
+      const g = await fetchSectorListApi();
+      apiGroups = g.length;
+      if (g.length) memberSample = { no: g[0].no, name: g[0].name, members: (await fetchSectorMembersApi(g[0].no)).length };
+    } catch (e) { apiError = e.message; }
+
     const m = await fetchSectorMap();
     res.json({
       sectorCount: m.sectors.length,
       mappedCodes: Object.keys(m.byCode).length,
       fetchedAt: m.fetchedAt,
       source: m.source || null,
+      industryApi: { groups: apiGroups, error: apiError, memberSample },
       sectors: m.sectors,
       sample: Object.entries(m.byCode).slice(0, 10),
     });
@@ -3200,7 +3234,7 @@ app.get('/api/flow/:code', checkStatsAuth, async (req, res) => {
  * "고쳤는데 왜 그대로냐"의 원인이 대부분 "아직 예전 코드가 돌고 있다"였다.
  * BUILD를 올려두면 /api/health만 열어봐도 지금 무엇이 떠 있는지 바로 알 수 있다.
  */
-const BUILD = '2026-09-13d 해외 재무 경로 재탐색';
+const BUILD = '2026-09-13e 업종 API 파라미터 수정';
 
 app.get('/api/health', (_, res) => res.json({
   ok: true,
