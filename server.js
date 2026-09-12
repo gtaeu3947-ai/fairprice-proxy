@@ -1565,6 +1565,35 @@ async function fetchSectorList() {
   return out;
 }
 
+/**
+ * 업종 분류를 종목별 API에서 거꾸로 모은다.
+ *
+ * 업종 목록 페이지가 재구축돼 0건이 나올 때를 위한 대체 경로다.
+ * 종목마다 요청이 하나씩 더 붙지만, 어차피 유니버스는 캐시돼 있고
+ * 업종 매핑도 12시간 캐시라 하루 한 번만 부담이 생긴다.
+ */
+async function fetchSectorMapFromStocks(codes) {
+  const byCode = {};
+  const counts = {};
+  const BATCH = 6;
+  for (let i = 0; i < codes.length; i += BATCH) {
+    const batch = codes.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (code) => {
+      try {
+        const j = await fetchJson(`https://m.stock.naver.com/api/stock/${code}/integration`);
+        // 업종명이 industryCodeType.industryName 등 어디에 있든 찾아낸다.
+        const name = findStringByKey(j, /industryname|업종/i, 0);
+        if (name && name.length <= 30) {
+          byCode[code] = name;
+          counts[name] = (counts[name] || 0) + 1;
+        }
+      } catch { /* 개별 실패는 무시 — 일부만 있어도 섹터 강도는 낸다 */ }
+    }));
+  }
+  const sectors = Object.entries(counts).map(([name, memberCount]) => ({ no: name, name, memberCount }));
+  return { byCode, sectors };
+}
+
 async function fetchSectorMembers(no) {
   const url = `https://finance.naver.com/sise/sise_group_detail.naver?type=upjong&no=${no}`;
   const html = await fetchHtml(url);
@@ -1582,7 +1611,24 @@ async function fetchSectorMap() {
   const cached = histCacheGet('sectormap');
   if (cached) return cached;
 
-  const list = await fetchSectorList();
+  const list = await fetchSectorList().catch(() => []);
+
+  // 업종 목록 페이지가 죽었으면 종목별 API로 거꾸로 모은다.
+  if (!list.length) {
+    const universe = histCacheGet('universe:kospi:150') || histCacheGet('universe:kospi:100') || [];
+    const universe2 = histCacheGet('universe:kosdaq:150') || histCacheGet('universe:kosdaq:100') || [];
+    const codes = [...universe, ...universe2].map(x => x.code).slice(0, 300);
+    if (codes.length) {
+      const alt = await fetchSectorMapFromStocks(codes);
+      const out2 = { ...alt, source: 'per-stock', fetchedAt: new Date().toISOString() };
+      histCacheSet('sectormap', out2);
+      return out2;
+    }
+    const empty = { byCode: {}, sectors: [], source: 'none', fetchedAt: new Date().toISOString() };
+    histCacheSet('sectormap', empty);
+    return empty;
+  }
+
   const byCode = {};
   const sectors = [];
   for (let i = 0; i < list.length; i += 6) {
@@ -1594,7 +1640,7 @@ async function fetchSectorMap() {
       sectors.push({ no: s.no, name: s.name, memberCount: codes.length });
     });
   }
-  const out = { byCode, sectors, fetchedAt: new Date().toISOString() };
+  const out = { byCode, sectors, source: 'group-page', fetchedAt: new Date().toISOString() };
   histCacheSet('sectormap', out);
   return out;
 }
@@ -2613,6 +2659,89 @@ app.get('/api/fundamentals-raw/:code', async (req, res) => {
   });
 });
 
+/**
+ * 업종 분류·해외 재무 출처 탐색기.
+ *
+ * 네이버가 시가총액 → 종목 페이지 → 업종 페이지 순으로 차례차례 재구축했다.
+ * 짐작으로 고치면 또 빗나가므로 후보를 한 번에 찔러보고 응답을 그대로 보여준다.
+ */
+app.get('/api/sector-probe', checkStatsAuth, async (req, res) => {
+  const H = { 'User-Agent': UA, 'Accept-Language': 'ko-KR,ko;q=0.9', Referer: 'https://finance.naver.com/' };
+  const HM = { ...H, Accept: 'application/json', Referer: 'https://m.stock.naver.com/' };
+
+  const cands = [
+    ['html-upjong', 'https://finance.naver.com/sise/sise_group.naver?type=upjong', H],
+    ['html-theme', 'https://finance.naver.com/sise/theme.naver', H],
+    ['api-industry', 'https://m.stock.naver.com/api/stocks/industry', HM],
+    ['api-industry-list', 'https://api.stock.naver.com/industry/list', HM],
+    ['api-upjong', 'https://m.stock.naver.com/api/stocks/upjong', HM],
+    // 종목 하나의 업종 정보 — 종목별로 받아도 되는지 확인용
+    ['api-integration-005930', 'https://m.stock.naver.com/api/stock/005930/integration', HM],
+  ];
+
+  const results = await Promise.all(cands.map(async ([name, url, headers]) => {
+    try {
+      const r = await fetch(url, { headers });
+      const buf = Buffer.from(await r.arrayBuffer());
+      let text = buf.toString('utf8');
+      // 구버전 페이지는 EUC-KR이라 utf8로 읽으면 깨진다 — 깨졌으면 다시 디코딩한다.
+      if (/\uFFFD/.test(text.slice(0, 500))) text = iconv.decode(buf, 'euc-kr');
+      let parsed = null;
+      try {
+        const j = JSON.parse(text);
+        parsed = { type: 'json', topKeys: Object.keys(j).slice(0, 15), sample: JSON.stringify(j).slice(0, 300) };
+      } catch {
+        parsed = {
+          type: 'html',
+          groupLinks: (text.match(/sise_group_detail/g) || []).length,
+          industryHits: (text.match(/industry/gi) || []).length,
+          head: text.slice(0, 250).replace(/\s+/g, ' '),
+        };
+      }
+      return { name, url, status: r.status, bytes: buf.length, ...parsed };
+    } catch (e) {
+      return { name, url, error: e.message };
+    }
+  }));
+  res.json({ hint: 'groupLinks가 0이 아니거나 json의 topKeys에 업종 목록이 보이는 경로를 씁니다.', results });
+});
+
+/** 해외 종목 재무·기본정보 후보 탐색 (네이버가 409를 내는 이유를 찾기 위함) */
+app.get('/api/us-fin-probe/:symbol', checkStatsAuth, async (req, res) => {
+  const sym = req.params.symbol.toUpperCase();
+  const HM = { 'User-Agent': UA, Accept: 'application/json', Referer: 'https://m.stock.naver.com/' };
+  const cands = [
+    ['world-basic-O', `https://api.stock.naver.com/stock/worldItem/${sym}.O/basic`],
+    ['world-integration-O', `https://api.stock.naver.com/stock/worldItem/${sym}.O/integration`],
+    ['foreign-basic-O', `https://api.stock.naver.com/foreign/item/${sym}.O/basic`],
+    ['foreign-integration-O', `https://api.stock.naver.com/foreign/item/${sym}.O/integration`],
+    ['m-worldstock-O', `https://m.stock.naver.com/api/worldstock/stock/${sym}.O/basic`],
+    ['m-worldstock-integration-O', `https://m.stock.naver.com/api/worldstock/stock/${sym}.O/integration`],
+    ['m-worldstock-finance-O', `https://m.stock.naver.com/api/worldstock/stock/${sym}.O/finance/annual`],
+    ['stockanalysis', `https://stockanalysis.com/api/symbol/s/${sym.toLowerCase()}/overview`],
+  ];
+  const results = await Promise.all(cands.map(async ([name, url]) => {
+    try {
+      const r = await fetch(url, { headers: HM });
+      const text = await r.text();
+      let info = { head: text.slice(0, 200).replace(/\s+/g, ' ') };
+      try {
+        const j = JSON.parse(text);
+        info = {
+          topKeys: Object.keys(j).slice(0, 15),
+          bpsHit: /"?(bps|BPS|주당순자산)"?/.test(text),
+          roeHit: /"?(roe|ROE)"?/.test(text),
+          head: JSON.stringify(j).slice(0, 250),
+        };
+      } catch { /* HTML일 수 있다 */ }
+      return { name, url, status: r.status, bytes: text.length, ...info };
+    } catch (e) {
+      return { name, url, error: e.message };
+    }
+  }));
+  res.json({ symbol: sym, hint: 'bpsHit·roeHit가 true인 경로를 씁니다.', results });
+});
+
 app.get('/api/sectors-raw', checkStatsAuth, async (req, res) => {
   try {
     const m = await fetchSectorMap();
@@ -2620,6 +2749,7 @@ app.get('/api/sectors-raw', checkStatsAuth, async (req, res) => {
       sectorCount: m.sectors.length,
       mappedCodes: Object.keys(m.byCode).length,
       fetchedAt: m.fetchedAt,
+      source: m.source || null,
       sectors: m.sectors,
       sample: Object.entries(m.byCode).slice(0, 10),
     });
@@ -2986,7 +3116,7 @@ app.get('/api/flow/:code', checkStatsAuth, async (req, res) => {
  * "고쳤는데 왜 그대로냐"의 원인이 대부분 "아직 예전 코드가 돌고 있다"였다.
  * BUILD를 올려두면 /api/health만 열어봐도 지금 무엇이 떠 있는지 바로 알 수 있다.
  */
-const BUILD = '2026-09-13 일목균형표 지표 추가';
+const BUILD = '2026-09-13b 업종·해외재무 출처 탐색기';
 
 app.get('/api/health', (_, res) => res.json({
   ok: true,
@@ -3227,7 +3357,7 @@ module.exports = {
   fetchMarketCapPage, fetchMarketCapSingle, fetchMarketCapUniverse, fetchInvestorFlow, screenOne, runScreen, percentileRanks,
   recordRecommendation, getRecommendation, listRecommendationDates, priceAsOf, computePerformance, hasRedis,
   fetchOhlcv, fetchOhlcvChartApi, fetchOhlcvHtml, fetchSectorMap, fetchSectorList, fetchSectorMembers,
-  evaluateOne, computeSectorStrength, runMomentum, runUsMomentum, fetchUsUniverse,
+  evaluateOne, computeSectorStrength, runMomentum, fetchSectorMap, fetchSectorMapFromStocks, runUsMomentum, fetchUsUniverse,
   runBacktest, buildBacktestConfig, BACKTEST_FILTERS, loadMomentumConfig, normalizeConditions,
   withRetry, fetchMarketCapPage, collectStocksFromJson, extractStocksFromText, extractStocksFromAnchors,
   // 테스트에서 캐시 상태를 리셋하기 위한 것. alsoLastGood=true면 '마지막 성공 목록'까지 지운다.

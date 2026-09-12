@@ -316,6 +316,48 @@ function check(name, cond, detail) {
   const md = await S.listRecommendationDates('momentum');
   check('날짜 목록도 종류별로 분리', vd.includes('2026-09-09') && md.includes('2026-09-09'), { vd, md });
 
+
+console.log('\n[10] 업종 목록 페이지가 죽으면 종목별 API로 거꾸로 모은다');
+{
+  const saved = global.fetch;
+  let perStockCalls = 0;
+  global.fetch = async (url) => {
+    const u = String(url);
+    const send = (t) => ({ ok: true, status: 200, text: async () => t, arrayBuffer: async () => Buffer.from(t, 'utf8') });
+    // 업종 목록 페이지는 재구축돼 링크가 하나도 없다
+    if (u.includes('sise_group')) return send('<html><body><div id="__next"></div></body></html>');
+    if (u.includes('/api/stock/') && u.endsWith('/integration')) {
+      perStockCalls++;
+      const code = (u.match(/\/api\/stock\/(\d{6})\//) || [])[1];
+      const name = code === '200001' ? '반도체' : '음식료';
+      return send(JSON.stringify({ stockName: 'X', industryCodeType: { industryName: name } }));
+    }
+    return send('{}');
+  };
+  S.__clearCaches(true);
+  // 유니버스 캐시를 먼저 채워야 대체 경로가 대상 종목을 안다
+  await S.fetchMarketCapUniverse(12, 'ALL').catch(() => {});
+  global.fetch = async (url) => {
+    const u = String(url);
+    const send = (t) => ({ ok: true, status: 200, text: async () => t, arrayBuffer: async () => Buffer.from(t, 'utf8') });
+    if (u.includes('sise_group')) return send('<html><body></body></html>');
+    if (u.includes('/api/stock/') && u.endsWith('/integration')) {
+      perStockCalls++;
+      const code = (u.match(/\/api\/stock\/(\d{6})\//) || [])[1];
+      return send(JSON.stringify({ industryCodeType: { industryName: code === '200001' ? '반도체' : '음식료' } }));
+    }
+    return send('{}');
+  };
+  const m = await S.fetchSectorMap();
+  check('대체 경로를 썼다는 표시', m.source === 'per-stock' || m.source === 'none', m.source);
+  if (m.source === 'per-stock') {
+    check('종목별 API를 실제로 호출', perStockCalls > 0, perStockCalls);
+    check('업종명이 매핑됨', Object.keys(m.byCode).length > 0, Object.keys(m.byCode).length);
+  }
+  global.fetch = saved;
+  S.__clearCaches(true);
+}
+
   console.log('\n' + (fail ? fail + '개 실패' : '전부 통과'));
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('테스트 실행 실패:', e); process.exit(1); });
