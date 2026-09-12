@@ -499,7 +499,7 @@
   }
 
   refreshRecoDates();
-  var PAGE_VERSION = '2026-09-13e';
+  var PAGE_VERSION = '2026-09-13g';
   fetch('/api/health').then(function(r){ return r.json(); }).then(function(j){
     var same = j.build && j.build.indexOf(PAGE_VERSION) === 0;
     var el = document.getElementById('buildInfo');

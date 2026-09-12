@@ -481,7 +481,12 @@
     }
     $('sectorChips').innerHTML = (d.sectorTop||[]).map(function(s){ return chipHtml(s,false); }).join('')
       || '<span class="fstatus">업종 데이터 없음</span>';
-    $('sectorChipsDown').innerHTML = (d.sectorBottom||[]).map(function(s){ return chipHtml(s,true); }).join('');
+    // 업종이 몇 개 안 되면 강·약을 나눌 수 없다. 그럴 땐 제목까지 감춘다.
+    var down = d.sectorBottom || [];
+    $('sectorChipsDown').innerHTML = down.map(function(s){ return chipHtml(s,true); }).join('');
+    var downLabel = $('sectorChipsDown').previousElementSibling;
+    if(downLabel) downLabel.style.display = down.length ? '' : 'none';
+    $('sectorChipsDown').style.display = down.length ? '' : 'none';
     Array.prototype.forEach.call(document.querySelectorAll('.chip'), function(el){
       el.addEventListener('click', function(){
         var cur = $('keywords').value.split(',').map(function(s){return s.trim();}).filter(Boolean);
@@ -579,7 +584,7 @@
 
   /* 화면 파일과 서버가 같은 판인지 한눈에 보이게 한다.
      둘이 다르면 배포가 반만 됐거나 브라우저가 예전 HTML을 들고 있는 것이다. */
-  var PAGE_VERSION = '2026-09-13e';
+  var PAGE_VERSION = '2026-09-13g';
   fetch('/api/health').then(function(r){ return r.json(); }).then(function(j){
     var same = j.build && j.build.indexOf(PAGE_VERSION) === 0;
     $('buildInfo').innerHTML = '화면 ' + PAGE_VERSION + ' · 서버 ' + esc(j.build || '(표시 없음)')
