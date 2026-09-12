@@ -1402,7 +1402,7 @@ function normalizeConditions(raw) {
   if (!raw || !Array.isArray(raw.conditions)) return { label: null, conditions: [], source: raw.source };
   const seen = new Set();
   const conditions = raw.conditions
-    .filter(c => c && c.indicator && c.key != null)
+    .filter(c => c && c.key != null && (c.indicator || (Array.isArray(c.any) && c.any.length)))
     .map((c, idx) => ({
       key: String(c.key || String.fromCharCode(65 + idx)),
       indicator: String(c.indicator),
@@ -1410,8 +1410,12 @@ function normalizeConditions(raw) {
       type: String(c.type || 'above'),
       level: Number.isFinite(Number(c.level)) ? Number(c.level) : null,  // rising/falling은 level이 없다
       bars: c.bars ? Number(c.bars) : undefined,
+      offset: c.offset ? Number(c.offset) : undefined,   // "2봉전" 판정
+      tol: c.tol != null ? Number(c.tol) : undefined,    // within 허용폭
+      any: Array.isArray(c.any) ? c.any : undefined,     // (A or B or C) 묶음
       desc: c.desc ? String(c.desc) : null,
     }))
+    .filter(c => c.indicator || (c.any && c.any.length))
     .filter(c => { if (seen.has(c.key)) return false; seen.add(c.key); return true; })
     .slice(0, 12);
   return { label: raw.label ? String(raw.label) : null, conditions, source: raw.source };
@@ -2053,41 +2057,95 @@ async function runUsMomentum(opt) {
 const BACKTEST_FILTERS = {
   volumeSurge: {
     label: '거래량 급증 (20일 평균의 2.5배 이상)',
-    cond: { key: 'V', indicator: 'volumeRatio', params: { n: 20 }, type: 'above', level: 2.5 },
+    conds: [{ key: 'V', indicator: 'volumeRatio', params: { n: 20 }, type: 'above', level: 2.5 }],
   },
   aboveMa20: {
     label: '종가가 20일선 위 (지지 확보)',
-    cond: { key: 'M', indicator: 'closeVsMa', params: { n: 20 }, type: 'above', level: 100 },
+    conds: [{ key: 'M', indicator: 'closeVsMa', params: { n: 20 }, type: 'above', level: 100 }],
   },
   ma20Rising: {
     label: '20일선 상승 전환',
-    cond: { key: 'R', indicator: 'ma', params: { n: 20 }, type: 'rising', bars: 1 },
+    conds: [{ key: 'R', indicator: 'ma', params: { n: 20 }, type: 'rising', bars: 1 }],
   },
   breakout5: {
     label: '최근 5일 고가 돌파',
-    cond: { key: 'H', indicator: 'closeVsHigh', params: { n: 5 }, type: 'above', level: 100 },
+    conds: [{ key: 'H', indicator: 'closeVsHigh', params: { n: 5 }, type: 'above', level: 100 }],
   },
   priorDrop: {
     label: '선행 하락 (60일 고점 대비 -15% 이하)',
-    cond: { key: 'D', indicator: 'drawdown', params: { n: 60 }, type: 'below', level: -15 },
+    conds: [{ key: 'D', indicator: 'drawdown', params: { n: 60 }, type: 'below', level: -15 }],
   },
   notOverheated: {
     label: '당일 과열 배제 (상승률 10% 이하)',
-    cond: { key: 'O', indicator: 'dayChange', params: {}, type: 'below', level: 10 },
+    conds: [{ key: 'O', indicator: 'dayChange', params: {}, type: 'below', level: 10 }],
   },
   calmEnough: {
     label: '변동성 과다 배제 (ATR 10% 이하)',
-    cond: { key: 'A', indicator: 'atrPct', params: { n: 14 }, type: 'below', level: 10 },
+    conds: [{ key: 'A', indicator: 'atrPct', params: { n: 14 }, type: 'below', level: 10 }],
+  },
+
+  /* ── 일목균형표 눌림 계열
+   * 널리 참고되는 조건검색식을 그대로 옮긴 것이다. 논리는 "구름 위 상승추세에서
+   * 기준선까지 눌린 자리를 잡는다"이고, 이는 실제 매매 방식(30분봉 기준선 대기)과
+   * 같은 발상을 일봉으로 옮긴 것이다. 원식의 항목별로 켜고 끌 수 있게 나눠 뒀다.
+   */
+  ichiAboveTenkan2: {
+    label: '[일목] 2봉전 종가가 전환선 위',
+    conds: [{ key: 'T', indicator: 'closeVsTenkan', params: {}, type: 'above', level: 100, offset: 2 }],
+  },
+  ichiNearKijun: {
+    label: '[일목] 종가·저가·시가 중 하나가 기준선 1% 이내 (눌림)',
+    conds: [{
+      key: 'K',
+      any: [
+        { indicator: 'closeVsKijun', params: {}, type: 'within', level: 100, tol: 1 },
+        { indicator: 'lowVsKijun', params: {}, type: 'within', level: 100, tol: 1 },
+        { indicator: 'openVsKijun', params: {}, type: 'within', level: 100, tol: 1 },
+      ],
+    }],
+  },
+  ichiAboveCloud: {
+    label: '[일목] 종가가 선행스팬1·2 위 (구름 위)',
+    conds: [
+      { key: 'S1', indicator: 'closeVsSpanA', params: {}, type: 'above', level: 100 },
+      { key: 'S2', indicator: 'closeVsSpanB', params: {}, type: 'above', level: 100 },
+    ],
+  },
+  bullCandle: {
+    label: '당일 양봉 (시가 < 종가)',
+    conds: [{ key: 'G', indicator: 'candleBody', params: {}, type: 'above', level: 100 }],
+  },
+  ma120Up: {
+    label: '120일선 2봉 연속 상승',
+    conds: [{ key: 'L', indicator: 'ma', params: { n: 120 }, type: 'rising', bars: 2 }],
+  },
+  ma240Up: {
+    label: '240일선 2봉 연속 상승',
+    conds: [{ key: 'P', indicator: 'ma', params: { n: 240 }, type: 'rising', bars: 2 }],
+  },
+  newHigh120: {
+    label: '20봉 이내에 120봉 신고가 발생',
+    conds: [{ key: 'Q', indicator: 'newHighAge', params: { n: 120 }, type: 'below', level: 20 }],
+  },
+  turnoverSpike: {
+    label: '20봉 이내 거래대금 500억 이상 1회 (미국은 백만$ 기준이라 값 조정 필요)',
+    conds: [{ key: 'N', indicator: 'maxTurnoverM', params: { n: 20 }, type: 'above', level: 50000 }],
+  },
+  volumeSurge500: {
+    label: '20봉 이내 전봉 거래량 대비 500% 이상 1회',
+    conds: [{ key: 'W', indicator: 'maxVolumeSurge', params: { n: 20 }, type: 'above', level: 500 }],
   },
 };
 
 /** 기본 조건식 + 켜둔 추가 필터를 합쳐 하나의 조건 정의로 만든다. */
 function buildBacktestConfig(filterNames, useBaseConditions) {
   const base = useBaseConditions ? loadMomentumConfig().conditions : [];
-  const extra = (filterNames || [])
-    .map(n => BACKTEST_FILTERS[n])
-    .filter(Boolean)
-    .map(f => f.cond);
+  // 필터 하나가 조건 여러 개를 담을 수 있다(구름 위 = 선행스팬1·2 둘 다처럼).
+  const extra = [];
+  (filterNames || []).forEach(n => {
+    const f = BACKTEST_FILTERS[n];
+    if (f) extra.push(...(f.conds || []));
+  });
   const seen = new Set();
   const conditions = [...base, ...extra].filter(c => {
     if (seen.has(c.key)) return false;
@@ -2164,7 +2222,9 @@ async function runBacktest(opt) {
   return {
     market: opt.market,
     conditions: config.conditions.map(c => ({
-      key: c.key, indicator: c.indicator, params: c.params, type: c.type, level: c.level, bars: c.bars,
+      key: c.key, indicator: c.indicator, params: c.params, type: c.type,
+      level: c.level, bars: c.bars, offset: c.offset, tol: c.tol,
+      any: c.any ? c.any.map(x => x.indicator) : undefined,
     })),
     filtersUsed: opt.filters,
     useBaseConditions: opt.useBaseConditions,
@@ -2926,7 +2986,7 @@ app.get('/api/flow/:code', checkStatsAuth, async (req, res) => {
  * "고쳤는데 왜 그대로냐"의 원인이 대부분 "아직 예전 코드가 돌고 있다"였다.
  * BUILD를 올려두면 /api/health만 열어봐도 지금 무엇이 떠 있는지 바로 알 수 있다.
  */
-const BUILD = '2026-09-12g 미국 백테스트·적정주가 대체경로';
+const BUILD = '2026-09-13 일목균형표 지표 추가';
 
 app.get('/api/health', (_, res) => res.json({
   ok: true,
