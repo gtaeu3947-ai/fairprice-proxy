@@ -2777,37 +2777,53 @@ app.get('/api/sector-probe', checkStatsAuth, async (req, res) => {
 /** 해외 종목 재무·기본정보 후보 탐색 (네이버가 409를 내는 이유를 찾기 위함) */
 app.get('/api/us-fin-probe/:symbol', checkStatsAuth, async (req, res) => {
   const sym = req.params.symbol.toUpperCase();
-  const HM = { 'User-Agent': UA, Accept: 'application/json', Referer: 'https://m.stock.naver.com/' };
+  const HM = { 'User-Agent': UA, Accept: 'application/json', Referer: `https://m.stock.naver.com/worldstock/stock/${sym}.O/total` };
+
+  /* 화면(m.stock.naver.com/worldstock/stock/IBM.O/total)에 BPS·EPS·시총·업종이
+   * 다 나오므로 데이터는 분명히 있다. 앞서 찍어본 주소가 전부 404였으므로,
+   * 일봉이 실제로 동작하는 chart/foreign 계열을 기준으로 이웃 경로를 훑는다. */
   const cands = [
-    ['world-basic-O', `https://api.stock.naver.com/stock/worldItem/${sym}.O/basic`],
-    ['world-integration-O', `https://api.stock.naver.com/stock/worldItem/${sym}.O/integration`],
-    ['foreign-basic-O', `https://api.stock.naver.com/foreign/item/${sym}.O/basic`],
-    ['foreign-integration-O', `https://api.stock.naver.com/foreign/item/${sym}.O/integration`],
-    ['m-worldstock-O', `https://m.stock.naver.com/api/worldstock/stock/${sym}.O/basic`],
-    ['m-worldstock-integration-O', `https://m.stock.naver.com/api/worldstock/stock/${sym}.O/integration`],
-    ['m-worldstock-finance-O', `https://m.stock.naver.com/api/worldstock/stock/${sym}.O/finance/annual`],
-    ['stockanalysis', `https://stockanalysis.com/api/symbol/s/${sym.toLowerCase()}/overview`],
+    ['stock-basic', `https://api.stock.naver.com/stock/${sym}.O/basic`],
+    ['stock-integration', `https://api.stock.naver.com/stock/${sym}.O/integration`],
+    ['stock-total', `https://api.stock.naver.com/stock/${sym}.O/total`],
+    ['stock-finance', `https://api.stock.naver.com/stock/${sym}.O/finance/annual`],
+    ['m-stock-basic', `https://m.stock.naver.com/api/stock/${sym}.O/basic`],
+    ['m-stock-integration', `https://m.stock.naver.com/api/stock/${sym}.O/integration`],
+    ['m-stock-finance', `https://m.stock.naver.com/api/stock/${sym}.O/finance/annual`],
+    ['m-worldstock-total', `https://m.stock.naver.com/api/worldstock/stock/${sym}.O/total`],
+    ['api-worldstock-basic', `https://api.stock.naver.com/worldstock/stock/${sym}.O/basic`],
+    ['api-worldstock-integration', `https://api.stock.naver.com/worldstock/stock/${sym}.O/integration`],
+    ['api-worldstock-finance', `https://api.stock.naver.com/worldstock/stock/${sym}.O/finance/annual`],
+    ['chart-sibling-basic', `https://api.stock.naver.com/chart/foreign/item/${sym}.O/basic`],
   ];
+
   const results = await Promise.all(cands.map(async ([name, url]) => {
     try {
       const r = await fetch(url, { headers: HM });
       const text = await r.text();
-      let info = { head: text.slice(0, 200).replace(/\s+/g, ' ') };
-      try {
-        const j = JSON.parse(text);
-        info = {
-          topKeys: Object.keys(j).slice(0, 15),
-          bpsHit: /"?(bps|BPS|주당순자산)"?/.test(text),
-          roeHit: /"?(roe|ROE)"?/.test(text),
-          head: JSON.stringify(j).slice(0, 250),
-        };
-      } catch { /* HTML일 수 있다 */ }
-      return { name, url, status: r.status, bytes: text.length, ...info };
+      const hit = (re) => re.test(text);
+      const out = { name, url, status: r.status, bytes: text.length };
+      if (r.ok) {
+        out.bpsHit = hit(/bps|주당순자산/i);
+        out.roeHit = hit(/\broe\b/i);
+        out.epsHit = hit(/\beps\b/i);
+        try { out.topKeys = Object.keys(JSON.parse(text)).slice(0, 15); } catch { /* HTML */ }
+        out.head = text.slice(0, 220).replace(/\s+/g, ' ');
+      } else {
+        out.head = text.slice(0, 120).replace(/\s+/g, ' ');
+      }
+      return out;
     } catch (e) {
       return { name, url, error: e.message };
     }
   }));
-  res.json({ symbol: sym, hint: 'bpsHit·roeHit가 true인 경로를 씁니다.', results });
+
+  res.json({
+    symbol: sym,
+    hint: 'status 200이면서 bpsHit 또는 epsHit가 true인 경로를 씁니다.',
+    ok: results.filter(r => r.status === 200).map(r => r.name),
+    results,
+  });
 });
 
 app.get('/api/sectors-raw', checkStatsAuth, async (req, res) => {
@@ -3184,7 +3200,7 @@ app.get('/api/flow/:code', checkStatsAuth, async (req, res) => {
  * "고쳤는데 왜 그대로냐"의 원인이 대부분 "아직 예전 코드가 돌고 있다"였다.
  * BUILD를 올려두면 /api/health만 열어봐도 지금 무엇이 떠 있는지 바로 알 수 있다.
  */
-const BUILD = '2026-09-13c 업종 API 전환';
+const BUILD = '2026-09-13d 해외 재무 경로 재탐색';
 
 app.get('/api/health', (_, res) => res.json({
   ok: true,
