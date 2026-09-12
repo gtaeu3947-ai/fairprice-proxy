@@ -398,6 +398,23 @@ console.log('\n[11] 업종 API는 20개씩 끊어 주므로 페이지를 넘겨 
   S.__clearCaches(true);
 }
 
+
+console.log('\n[12] 강한 업종과 약한 업종이 겹치지 않는다');
+{
+  const mk = (n) => Array.from({ length: n }, (_, i) => ({ name: 'S' + i, ret5: 10 - i }));
+  for (const n of [0, 1, 4, 5]) {
+    const r = S.splitSectorRanks(mk(n));
+    check(`업종 ${n}개면 약한 업종은 비운다`, r.bottom.length === 0, r);
+  }
+  const six = S.splitSectorRanks(mk(6));
+  check('6개면 강 3 / 약 3으로 갈린다', six.top.length === 3 && six.bottom.length === 3, six);
+  check('겹치는 업종 없음', new Set([...six.top, ...six.bottom].map(x => x.name)).size === 6);
+
+  const many = S.splitSectorRanks(mk(20));
+  check('20개면 강 8 / 약 5', many.top.length === 8 && many.bottom.length === 5, many);
+  check('약한 쪽이 실제로 성적이 나쁘다', many.bottom[0].ret5 < many.top[0].ret5, { b: many.bottom[0], t: many.top[0] });
+}
+
   console.log('\n' + (fail ? fail + '개 실패' : '전부 통과'));
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('테스트 실행 실패:', e); process.exit(1); });

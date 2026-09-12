@@ -1775,6 +1775,22 @@ async function evaluateOne(item, opt, config) {
   }
 }
 
+/**
+ * 강한 업종 / 약한 업종을 겹치지 않게 자른다.
+ *
+ * 예전에는 위 8개·아래 5개를 그냥 잘라서, 업종이 4개뿐일 때 같은 업종이
+ * 양쪽에 다 나왔다. 나눌 만큼 많지 않으면 약한 업종은 아예 비운다.
+ */
+function splitSectorRanks(sorted) {
+  const n = sorted.length;
+  if (n < 6) return { top: sorted.slice(0, 8), bottom: [] };   // 갈라 봐야 의미 없음
+  const topN = Math.min(8, Math.ceil(n / 2));
+  return {
+    top: sorted.slice(0, topN),
+    bottom: sorted.slice(topN).slice(-5).reverse(),
+  };
+}
+
 /** 유니버스 평가 결과를 업종별로 묶어 "섹터 강도"를 매긴다. */
 function computeSectorStrength(rows, sectorByCode, minMembers) {
   const groups = new Map();
@@ -1987,8 +2003,8 @@ async function runMomentum(opt) {
       strictCount: funnel.strict,
       condCount,
     },
-    sectorTop: sectorInfo.sectors.slice(0, 8),
-    sectorBottom: sectorInfo.sectors.slice(-5).reverse(),
+    sectorTop: splitSectorRanks(sectorInfo.sectors).top,
+    sectorBottom: splitSectorRanks(sectorInfo.sectors).bottom,
     sectorError,
     candidatesKospi: topKospi,
     candidatesKosdaq: topKosdaq,
@@ -2205,8 +2221,8 @@ async function runUsMomentum(opt) {
     conditionsConfigured: condCount > 0,
     funnel,
     marketRead: { regime: regimeRead, aboveMa20Pct, aboveMa60Pct, avgRet5, strictCount: funnel.strict, condCount },
-    sectorTop: sectorInfo.sectors.slice(0, 8),
-    sectorBottom: sectorInfo.sectors.slice(-5).reverse(),
+    sectorTop: splitSectorRanks(sectorInfo.sectors).top,
+    sectorBottom: splitSectorRanks(sectorInfo.sectors).bottom,
     candidates: top,
     runnerUps: ranked.slice(opt.topN, opt.topN + 12),
     opt,
@@ -3274,7 +3290,7 @@ app.get('/api/flow/:code', checkStatsAuth, async (req, res) => {
  * "고쳤는데 왜 그대로냐"의 원인이 대부분 "아직 예전 코드가 돌고 있다"였다.
  * BUILD를 올려두면 /api/health만 열어봐도 지금 무엇이 떠 있는지 바로 알 수 있다.
  */
-const BUILD = '2026-09-13f 업종 전체 페이지 수집';
+const BUILD = '2026-09-13g 강·약 업종 중복 수정';
 
 app.get('/api/health', (_, res) => res.json({
   ok: true,
@@ -3516,7 +3532,7 @@ module.exports = {
   recordRecommendation, getRecommendation, listRecommendationDates, priceAsOf, computePerformance, hasRedis,
   fetchOhlcv, fetchOhlcvChartApi, fetchOhlcvHtml, fetchSectorMap, fetchSectorList, fetchSectorMembers,
   evaluateOne, computeSectorStrength, runMomentum, fetchSectorMap, fetchSectorMapFromStocks,
-  fetchSectorListApi, fetchSectorMembersApi, runUsMomentum, fetchUsUniverse,
+  fetchSectorListApi, fetchSectorMembersApi, splitSectorRanks, runUsMomentum, fetchUsUniverse,
   runBacktest, buildBacktestConfig, BACKTEST_FILTERS, loadMomentumConfig, normalizeConditions,
   withRetry, fetchMarketCapPage, collectStocksFromJson, extractStocksFromText, extractStocksFromAnchors,
   // 테스트에서 캐시 상태를 리셋하기 위한 것. alsoLastGood=true면 '마지막 성공 목록'까지 지운다.
