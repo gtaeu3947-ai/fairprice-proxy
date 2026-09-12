@@ -568,6 +568,12 @@
         + (c.fairPrice != null && c.fairNote
             ? '<div class="metric"><span style="color:#A97614;font-size:12px">' + esc(c.fairNote) + '</span><span></span></div>'
             : '')
+        + (c.fairInputs
+            ? '<div class="metric"><span style="color:#7B8896;font-size:11.5px">계산 근거</span>'
+              + '<span style="color:#7B8896;font-size:11.5px">ROE ' + (c.fairInputs.roe || []).join('/')
+              + '% · 자본 ' + (c.fairInputs.equityEok == null ? '—' : Math.round(c.fairInputs.equityEok).toLocaleString('ko-KR') + '억')
+              + '</span></div>'
+            : '')
         + valueRows
         + '<div class="metric"><span>거래량비율</span><span>' + (c.volumeRatio==null?'—':c.volumeRatio.toFixed(2)+'배') + '</span></div>'
         + '<div class="metric"><span>5일 / 20일</span><span class="' + (c.ret5>=0?'gain-t':'loss-t') + '">'
@@ -673,7 +679,7 @@
 
   /* 화면 파일과 서버가 같은 판인지 한눈에 보이게 한다.
      둘이 다르면 배포가 반만 됐거나 브라우저가 예전 HTML을 들고 있는 것이다. */
-  var PAGE_VERSION = '2026-09-12e';
+  var PAGE_VERSION = '2026-09-13c';
   fetch('/api/health').then(function(r){ return r.json(); }).then(function(j){
     var same = j.build && j.build.indexOf(PAGE_VERSION) === 0;
     $('buildInfo').innerHTML = '화면 ' + PAGE_VERSION + ' · 서버 ' + esc(j.build || '(표시 없음)')
