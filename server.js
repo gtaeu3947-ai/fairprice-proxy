@@ -1545,6 +1545,39 @@ async function fetchOhlcv(code, calendarDays) {
  * 업종 목록 1건 + 업종별 상세 약 40건 = 하루 한 번만 받으면 되므로 12시간 캐시한다.
  */
 
+/**
+ * 업종 목록을 API에서 받는다.
+ *
+ * 네이버가 업종 페이지도 Next.js로 재구축해 HTML에서 링크가 사라졌다(2026-09).
+ * 대신 이 API가 업종 번호·이름·구성종목수·당일 등락률까지 한 번에 준다.
+ * 응답: { groups: [{ no, name, totalCount, changeRate, riseCount, fallCount }] }
+ */
+async function fetchSectorListApi() {
+  const j = await fetchJson('https://m.stock.naver.com/api/stocks/industry?page=1&pageSize=100');
+  const groups = j?.groups || j?.result?.groups || [];
+  if (!Array.isArray(groups) || !groups.length) throw new Error('업종 API에서 groups를 찾지 못했습니다');
+  return groups
+    .filter(g => g && g.no != null && g.name)
+    .map(g => ({
+      no: String(g.no),
+      name: String(g.name).trim(),
+      memberCount: toNum(g.totalCount) ?? null,
+      changeRate: toNum(g.changeRate),
+    }));
+}
+
+/** 업종별 구성종목을 API에서 받는다. */
+async function fetchSectorMembersApi(no) {
+  const j = await fetchJson(`https://m.stock.naver.com/api/stocks/industry/${no}?page=1&pageSize=200`);
+  const list = j?.stocks || j?.result?.stocks || j?.items || [];
+  const out = [];
+  (Array.isArray(list) ? list : []).forEach(x => {
+    const code = String(x.itemCode || x.code || x.reutersCode || '').match(/\d{6}/);
+    if (code) out.push(code[0]);
+  });
+  return out;
+}
+
 async function fetchSectorList() {
   const url = 'https://finance.naver.com/sise/sise_group.naver?type=upjong';
   const html = await fetchHtml(url);
@@ -1611,9 +1644,32 @@ async function fetchSectorMap() {
   const cached = histCacheGet('sectormap');
   if (cached) return cached;
 
+  // 1순위: 업종 API. HTML 페이지가 재구축된 뒤로 이쪽이 유일하게 살아 있다.
+  try {
+    const groups = await fetchSectorListApi();
+    const byCode = {};
+    const sectors = [];
+    for (let i = 0; i < groups.length; i += 6) {
+      const batch = groups.slice(i, i + 6);
+      const res = await Promise.all(batch.map(g => fetchSectorMembersApi(g.no).catch(() => [])));
+      batch.forEach((g, k) => {
+        res[k].forEach(c => { if (!byCode[c]) byCode[c] = g.name; });
+        sectors.push({ no: g.no, name: g.name, memberCount: res[k].length || g.memberCount, changeRate: g.changeRate });
+      });
+    }
+    if (Object.keys(byCode).length) {
+      const out = { byCode, sectors, source: 'industry-api', fetchedAt: new Date().toISOString() };
+      histCacheSet('sectormap', out);
+      return out;
+    }
+    // 구성종목을 못 받아도 업종 목록만으로는 의미가 없다 — 다음 경로로 넘어간다.
+  } catch (e) {
+    console.error('업종 API 실패:', e.message);
+  }
+
   const list = await fetchSectorList().catch(() => []);
 
-  // 업종 목록 페이지가 죽었으면 종목별 API로 거꾸로 모은다.
+  // 업종 목록 페이지도 죽었으면 종목별 API로 거꾸로 모은다.
   if (!list.length) {
     const universe = histCacheGet('universe:kospi:150') || histCacheGet('universe:kospi:100') || [];
     const universe2 = histCacheGet('universe:kosdaq:150') || histCacheGet('universe:kosdaq:100') || [];
@@ -1726,9 +1782,21 @@ async function attachFairValue(list, opt) {
         c.fairPrice = Math.round(fv.fairPrice);
         c.roeW = Math.round(fv.roeW * 100) / 100;
         c.marginPct = Math.round((fv.roeW - fv.k * 100) * 100) / 100;
+        // 계산 근거를 같이 내보낸다. 적정주가가 터무니없이 나올 때 어디서 비롯됐는지
+        // 숫자를 보고 판단할 수 있어야 한다.
+        c.fairInputs = {
+          roe: fund.roe, equityEok: round2(fund.equityEok), bps: round2(fund.bps),
+          shares: fund.shares, equityNote: fund.equityNote,
+        };
         // 괴리율은 화면에 띄운 종가 기준으로 계산해야 카드 안에서 앞뒤가 맞는다.
         c.gapPct = round2(gapPct(c.close, fv.fairPrice));
+
+        /* 경고 순서는 "더 위험한 것부터". S-RIM은 ROE가 영원히 유지된다고 가정하므로
+         * ROE가 높을수록 값이 기하급수로 커진다. 조선·반도체처럼 실적이 크게 출렁이는
+         * 업종에서는 이 가정이 무너져서 적정주가가 몇 배로 부풀려진다. */
         if (fv.roeW <= fv.k * 100) c.fairNote = 'ROE가 요구수익률 이하 (초과이익 없음)';
+        else if (fv.roeW >= 20) c.fairNote = 'ROE ' + c.roeW + '%가 계속 유지된다는 가정 — 경기민감주면 과대평가';
+        else if (c.gapPct != null && c.gapPct <= -50) c.fairNote = '괴리율이 과도합니다 — 계산 근거를 확인하십시오';
         else if (fund.equityNote && /BPS/.test(fund.equityNote)) c.fairNote = '자기자본이 BPS 기반 추정값';
       } catch (e) {
         c.fairNote = '재무 조회 실패';
@@ -3116,7 +3184,7 @@ app.get('/api/flow/:code', checkStatsAuth, async (req, res) => {
  * "고쳤는데 왜 그대로냐"의 원인이 대부분 "아직 예전 코드가 돌고 있다"였다.
  * BUILD를 올려두면 /api/health만 열어봐도 지금 무엇이 떠 있는지 바로 알 수 있다.
  */
-const BUILD = '2026-09-13b 업종·해외재무 출처 탐색기';
+const BUILD = '2026-09-13c 업종 API 전환';
 
 app.get('/api/health', (_, res) => res.json({
   ok: true,
@@ -3357,7 +3425,8 @@ module.exports = {
   fetchMarketCapPage, fetchMarketCapSingle, fetchMarketCapUniverse, fetchInvestorFlow, screenOne, runScreen, percentileRanks,
   recordRecommendation, getRecommendation, listRecommendationDates, priceAsOf, computePerformance, hasRedis,
   fetchOhlcv, fetchOhlcvChartApi, fetchOhlcvHtml, fetchSectorMap, fetchSectorList, fetchSectorMembers,
-  evaluateOne, computeSectorStrength, runMomentum, fetchSectorMap, fetchSectorMapFromStocks, runUsMomentum, fetchUsUniverse,
+  evaluateOne, computeSectorStrength, runMomentum, fetchSectorMap, fetchSectorMapFromStocks,
+  fetchSectorListApi, fetchSectorMembersApi, runUsMomentum, fetchUsUniverse,
   runBacktest, buildBacktestConfig, BACKTEST_FILTERS, loadMomentumConfig, normalizeConditions,
   withRetry, fetchMarketCapPage, collectStocksFromJson, extractStocksFromText, extractStocksFromAnchors,
   // 테스트에서 캐시 상태를 리셋하기 위한 것. alsoLastGood=true면 '마지막 성공 목록'까지 지운다.

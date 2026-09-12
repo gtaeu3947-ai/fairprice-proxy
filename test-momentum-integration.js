@@ -294,9 +294,13 @@ function check(name, cond, detail) {
     const expect = Math.round((c.close / c.fairPrice - 1) * 1000) / 10;
     return Math.abs(c.gapPct - expect) < 0.2;
   }), withFv.map(c => ({ close: c.close, fair: c.fairPrice, gap: c.gapPct })));
-  check('자기자본이 BPS 추정이면 그 사실을 표시',
-    withFv.filter(c => c.fairPrice != null).every(c => c.fairNote == null || /추정|초과이익/.test(c.fairNote)),
+  // 경고는 더 위험한 것부터 붙는다: ROE 과다 → 괴리율 과도 → BPS 추정
+  check('적정주가가 나온 종목에는 판단 근거가 되는 경고가 붙는다',
+    withFv.filter(c => c.fairPrice != null).every(c => /추정|초과이익|유지된다는 가정|과도/.test(c.fairNote || '')),
     withFv.map(c => c.fairNote));
+  check('계산 근거(ROE·자기자본)가 함께 나온다',
+    withFv.filter(c => c.fairPrice != null).every(c => c.fairInputs && Array.isArray(c.fairInputs.roe)),
+    withFv.map(c => c.fairInputs));
 
   console.log('\n[8-2] 끄면 재무 조회를 하지 않는다');
   const noFv = await S.runMomentum({ ...opt, withFairValue: false, topN: 2 });
