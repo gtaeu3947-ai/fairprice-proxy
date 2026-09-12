@@ -496,7 +496,7 @@
     }).join('');
   }
 
-  var PAGE_VERSION = '2026-09-13';
+  var PAGE_VERSION = '2026-09-13e';
   fetch('/api/health').then(function(r){ return r.json(); }).then(function(j){
     var same = j.build && j.build.indexOf(PAGE_VERSION) === 0;
     $('buildInfo').innerHTML = '화면 ' + PAGE_VERSION + ' · 서버 ' + esc(j.build || '(표시 없음)')
