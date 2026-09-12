@@ -1552,23 +1552,55 @@ async function fetchOhlcv(code, calendarDays) {
  * 대신 이 API가 업종 번호·이름·구성종목수·당일 등락률까지 한 번에 준다.
  * 응답: { groups: [{ no, name, totalCount, changeRate, riseCount, fallCount }] }
  */
+/**
+ * 업종 목록. 한 번에 20개씩만 주므로 페이지를 넘겨가며 다 받는다.
+ *
+ * 응답의 totalCount가 전체 업종 수를 알려주므로 그걸 기준으로 멈춘다.
+ * 파라미터 이름이 판마다 달라 404가 나기도 해서, 통하는 형태를 한 번 찾아
+ * 그 형태로 계속 넘긴다.
+ */
 async function fetchSectorListApi() {
-  // 파라미터를 붙이면 404가 났다. 탐색에서 200을 낸 형태 그대로 부른다.
-  const urls = [
-    'https://m.stock.naver.com/api/stocks/industry',
-    'https://m.stock.naver.com/api/stocks/industry?page=1',
+  const base = 'https://m.stock.naver.com/api/stocks/industry';
+  const shapes = [
+    (p) => `${base}?page=${p}`,
+    (p) => `${base}?page=${p}&pageSize=100`,
+    (p) => `${base}?pageSize=100&page=${p}`,
+    () => base,
   ];
-  let j = null, lastErr = null;
-  for (const u of urls) {
-    try { j = await fetchJson(u); break; }
-    catch (e) { lastErr = e; }
-  }
-  if (!j) throw lastErr || new Error('업종 API 호출 실패');
 
-  const groups = j?.groups || j?.result?.groups || j?.industries || [];
-  if (!Array.isArray(groups) || !groups.length) throw new Error('업종 API에서 groups를 찾지 못했습니다');
-  return groups
-    .filter(g => g && g.no != null && g.name)
+  const parse = (j) => {
+    const groups = j?.groups || j?.result?.groups || j?.industries || [];
+    return Array.isArray(groups) ? groups : [];
+  };
+
+  let shape = null, first = null, lastErr = null;
+  for (const f of shapes) {
+    try {
+      const j = await fetchJson(f(1));
+      if (parse(j).length) { shape = f; first = j; break; }
+    } catch (e) { lastErr = e; }
+  }
+  if (!first) throw lastErr || new Error('업종 API에서 groups를 찾지 못했습니다');
+
+  const all = [...parse(first)];
+  const total = toNum(first.totalCount) ?? null;
+  const perPage = all.length;
+
+  // 페이지를 넘길 수 있는 형태였고, 아직 덜 받았으면 이어서 받는다.
+  if (shape !== shapes[3] && perPage > 0 && total && all.length < total) {
+    const pages = Math.min(12, Math.ceil(total / perPage));   // 과도한 요청 방지
+    for (let p = 2; p <= pages; p++) {
+      try {
+        const more = parse(await fetchJson(shape(p)));
+        if (!more.length) break;
+        all.push(...more);
+      } catch { break; }
+    }
+  }
+
+  const seen = new Set();
+  return all
+    .filter(g => g && g.no != null && g.name && !seen.has(String(g.no)) && seen.add(String(g.no)))
     .map(g => ({
       no: String(g.no),
       name: String(g.name).trim(),
@@ -1578,25 +1610,33 @@ async function fetchSectorListApi() {
 }
 
 /** 업종별 구성종목을 API에서 받는다. */
+/** 업종별 구성종목. 이쪽도 20개씩 끊겨 오므로 페이지를 넘겨 다 받는다. */
 async function fetchSectorMembersApi(no) {
-  // 목록 API와 마찬가지로 파라미터 유무에 따라 404가 날 수 있어 순서대로 시도한다.
-  const urls = [
-    `https://m.stock.naver.com/api/stocks/industry/${no}`,
-    `https://m.stock.naver.com/api/stocks/industry/${no}?page=1`,
-    `https://m.stock.naver.com/api/stocks/industry/${no}?page=1&pageSize=200`,
-  ];
-  let j = null;
-  for (const u of urls) {
-    try { j = await fetchJson(u); break; } catch { /* 다음 형태로 */ }
+  const base = `https://m.stock.naver.com/api/stocks/industry/${no}`;
+  const pick = (j) => {
+    const list = j?.stocks || j?.result?.stocks || j?.items || j?.stockList || [];
+    const out = [];
+    (Array.isArray(list) ? list : []).forEach(x => {
+      const m = String(x.itemCode || x.code || x.reutersCode || '').match(/\d{6}/);
+      if (m) out.push(m[0]);
+    });
+    return out;
+  };
+
+  const codes = [];
+  const seen = new Set();
+  for (let p = 1; p <= 10; p++) {
+    let got = null;
+    for (const u of [`${base}?page=${p}`, `${base}?page=${p}&pageSize=100`, (p === 1 ? base : null)]) {
+      if (!u) continue;
+      try { got = pick(await fetchJson(u)); if (got.length) break; } catch { /* 다음 형태 */ }
+    }
+    if (!got || !got.length) break;
+    let added = 0;
+    got.forEach(c => { if (!seen.has(c)) { seen.add(c); codes.push(c); added++; } });
+    if (added === 0) break;          // 같은 페이지가 반복되면 중단
   }
-  if (!j) return [];
-  const list = j?.stocks || j?.result?.stocks || j?.items || j?.stockList || [];
-  const out = [];
-  (Array.isArray(list) ? list : []).forEach(x => {
-    const code = String(x.itemCode || x.code || x.reutersCode || '').match(/\d{6}/);
-    if (code) out.push(code[0]);
-  });
-  return out;
+  return codes;
 }
 
 async function fetchSectorList() {
@@ -3234,7 +3274,7 @@ app.get('/api/flow/:code', checkStatsAuth, async (req, res) => {
  * "고쳤는데 왜 그대로냐"의 원인이 대부분 "아직 예전 코드가 돌고 있다"였다.
  * BUILD를 올려두면 /api/health만 열어봐도 지금 무엇이 떠 있는지 바로 알 수 있다.
  */
-const BUILD = '2026-09-13e 업종 API 파라미터 수정';
+const BUILD = '2026-09-13f 업종 전체 페이지 수집';
 
 app.get('/api/health', (_, res) => res.json({
   ok: true,

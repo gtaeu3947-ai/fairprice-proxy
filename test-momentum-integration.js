@@ -362,6 +362,42 @@ console.log('\n[10] 업종 목록 페이지가 죽으면 종목별 API로 거꾸
   S.__clearCaches(true);
 }
 
+
+console.log('\n[11] 업종 API는 20개씩 끊어 주므로 페이지를 넘겨 다 받아야 한다');
+{
+  const saved = global.fetch;
+  const ALL = Array.from({ length: 78 }, (_, i) => ({ no: 200 + i, name: '업종' + i, totalCount: 5, changeRate: 1 }));
+  global.fetch = async (url) => {
+    const u = String(url);
+    const send = (o) => { const t = JSON.stringify(o); return { ok: true, status: 200, text: async () => t, arrayBuffer: async () => Buffer.from(t, 'utf8') }; };
+    const bad = { ok: false, status: 404, text: async () => '', arrayBuffer: async () => Buffer.alloc(0) };
+    if (u.includes('/api/stocks/industry/')) {
+      if (!u.includes('page=')) return bad;                       // 파라미터 없으면 404 (실제로 그랬다)
+      const p = Number((u.match(/page=(\d+)/) || [])[1] || 1);
+      const start = (p - 1) * 20;
+      const stocks = Array.from({ length: Math.max(0, Math.min(20, 45 - start)) }, (_, i) => ({ itemCode: String(100000 + start + i) }));
+      return send({ stocks });
+    }
+    if (u.includes('/api/stocks/industry')) {
+      if (!u.includes('page=')) return bad;
+      const p = Number((u.match(/page=(\d+)/) || [])[1] || 1);
+      return send({ groups: ALL.slice((p - 1) * 20, p * 20), totalCount: ALL.length });
+    }
+    throw new Error('예상치 못한 URL: ' + u);
+  };
+
+  const list = await S.fetchSectorListApi();
+  check('업종 78개를 모두 받는다 (한 페이지 20개)', list.length === 78, list.length);
+  check('중복 없이 수집', new Set(list.map(x => x.no)).size === 78, list.length);
+  check('등락률이 함께 온다', typeof list[0].changeRate === 'number', list[0]);
+
+  const mem = await S.fetchSectorMembersApi(315);
+  check('구성종목 45개를 모두 받는다', mem.length === 45, mem.length);
+  check('종목코드 형식', mem.every(c => /^\d{6}$/.test(c)), mem.slice(0, 3));
+  global.fetch = saved;
+  S.__clearCaches(true);
+}
+
   console.log('\n' + (fail ? fail + '개 실패' : '전부 통과'));
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('테스트 실행 실패:', e); process.exit(1); });
