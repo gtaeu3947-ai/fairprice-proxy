@@ -299,7 +299,36 @@ function aggregate(perStock, opt) {
     }))
     .sort((a, b) => a.passCount - b.passCount);
 
+  /* 연도별 성적.
+   *
+   * 5년 평균 하나만 보면 "올해가 유독 나빴나"를 알 수 없다. 특정 해에만 통하는
+   * 조건식이었는지, 아니면 매년 비슷했는지는 갈라 봐야 보인다.
+   * 표본이 적은 해는 숫자가 튀므로 건수를 함께 낸다. */
+  const byYearMap = {};
+  allTrades.forEach(t => {
+    const y = String(t.date).slice(0, 4);
+    if (!byYearMap[y]) byYearMap[y] = [];
+    byYearMap[y].push(t);
+  });
+  const byYear = Object.keys(byYearMap).sort().map(y => {
+    const arr = byYearMap[y];
+    const rets = arr.map(t => t.returnPct);
+    const bh = arr.map(t => t.buyHoldPct);
+    return {
+      year: y,
+      trades: arr.length,
+      avgReturnPct: r2(mean(rets)),
+      winRatePct: r2((arr.filter(t => t.returnPct > 0).length / arr.length) * 100),
+      targetHitRatePct: r2((arr.filter(t => t.exitReason === 'target').length / arr.length) * 100),
+      stopHitRatePct: r2((arr.filter(t => t.exitReason === 'stop').length / arr.length) * 100),
+      avgBuyHoldPct: r2(mean(bh)),
+      worstTradePct: r2(Math.min(...rets)),
+      reliable: arr.length >= 20,
+    };
+  });
+
   return {
+    byYear,
     overall: summarize(allTrades, benchSplit),
     train: summarize(train, benchSplit),
     test: summarize(test, benchSplit),

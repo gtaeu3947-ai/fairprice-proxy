@@ -330,5 +330,41 @@ console.log('\n[21] 물타기 뒤에도 못 살아난 거래를 따로 센다');
   check('평균 투입 비중 0.75', sum.avgInvestedWeight === 0.75, sum.avgInvestedWeight);
 }
 
+
+console.log('\n[22] 연도별 갈라 보기');
+{
+  const mk = (date, ret, reason) => ({
+    date, returnPct: ret, buyHoldPct: ret + 2, exitReason: reason,
+    exitBars: 3, mfePct: 8, maePct: -2, passCount: 3, entryOffset: 1, investedWeight: 1, addedAt: null,
+  });
+  const perStock = [{
+    code: 'A', name: '가',
+    trades: [
+      // 2025년: 좋았던 해 (목표 도달 위주)
+      ...Array.from({ length: 25 }, (_, i) => mk('2025-0' + (i % 9 + 1) + '-10', 6, 'target')),
+      // 2026년: 나빴던 해 (손절 위주) — 표본도 적다
+      ...Array.from({ length: 8 }, (_, i) => mk('2026-0' + (i % 9 + 1) + '-10', -6, 'stop')),
+    ],
+    benchmark: [1, 1],
+  }];
+  const agg = BT.aggregate(perStock, { splitDate: '2026-01-01', holdDays: 10 });
+
+  check('연도가 두 개로 갈린다', agg.byYear.length === 2, agg.byYear.map(y => y.year));
+  const y25 = agg.byYear.find(y => y.year === '2025');
+  const y26 = agg.byYear.find(y => y.year === '2026');
+  check('2025년 25건', y25.trades === 25, y25);
+  check('2026년 8건', y26.trades === 8, y26);
+  check('좋았던 해 평균 +6%', Math.abs(y25.avgReturnPct - 6) < 0.01, y25.avgReturnPct);
+  check('나빴던 해 평균 -6%', Math.abs(y26.avgReturnPct + 6) < 0.01, y26.avgReturnPct);
+  check('목표 도달률이 해마다 다르다',
+    y25.targetHitRatePct === 100 && y26.targetHitRatePct === 0, { a: y25.targetHitRatePct, b: y26.targetHitRatePct });
+  check('표본 20건 미만인 해는 신뢰도 표시가 꺼진다',
+    y25.reliable === true && y26.reliable === false, { a: y25.reliable, b: y26.reliable });
+  check('연도 오름차순', agg.byYear[0].year < agg.byYear[1].year, agg.byYear.map(y => y.year));
+  check('"안 팔았다면" 값도 연도별로 나온다',
+    typeof y25.avgBuyHoldPct === 'number' && y25.avgBuyHoldPct > y25.avgReturnPct, y25);
+  check('최악의 거래가 연도별로 기록됨', y26.worstTradePct === -6, y26.worstTradePct);
+}
+
 console.log('\n' + (fail ? fail + '개 실패' : '전부 통과'));
 process.exit(fail ? 1 : 0);

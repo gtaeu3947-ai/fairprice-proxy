@@ -3290,7 +3290,7 @@ app.get('/api/flow/:code', checkStatsAuth, async (req, res) => {
  * "고쳤는데 왜 그대로냐"의 원인이 대부분 "아직 예전 코드가 돌고 있다"였다.
  * BUILD를 올려두면 /api/health만 열어봐도 지금 무엇이 떠 있는지 바로 알 수 있다.
  */
-const BUILD = '2026-09-13g 강·약 업종 중복 수정';
+const BUILD = '2026-09-13h 백테스트 연도별 성적';
 
 app.get('/api/health', (_, res) => res.json({
   ok: true,
