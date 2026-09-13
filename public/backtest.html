@@ -256,6 +256,70 @@
   </div>
 </section>
 
+<section>
+  <div class="stitle"><h2>조합 탐색</h2><span>필터 조합을 전부 돌려 살아남는 것만 추립니다</span></div>
+  <div class="panel">
+    <p class="note" style="margin-top:0">
+      위 설정(시장·종목 수·기간·진입·청산)을 그대로 쓰고, <b>추가 필터의 모든 조합</b>을 돌립니다.
+      수백 개 중 1등은 운으로도 나오므로, <b>1등이 아니라 상위권에 반복해서 등장하는 필터</b>를 보십시오.
+    </p>
+    <div class="grid">
+      <div class="f">
+        <label for="maxFilters">조합 최대 개수</label>
+        <select id="maxFilters">
+          <option value="1">1개씩</option>
+          <option value="2" selected>2개까지</option>
+          <option value="3">3개까지 (느림)</option>
+        </select>
+      </div>
+      <div class="f">
+        <label for="objective">무엇을 기준으로 정렬</label>
+        <select id="objective">
+          <option value="avg" selected>평균 수익률</option>
+          <option value="stop">손절률 낮은 순</option>
+          <option value="edge">벤치마크 대비</option>
+          <option value="test">검증 구간 성적</option>
+        </select>
+      </div>
+      <div class="f">
+        <label for="minTrades">최소 신호 건수</label>
+        <input id="minTrades" type="number" value="50" step="10" min="10">
+        <span class="hint">이보다 적으면 순위에서 뺍니다</span>
+      </div>
+      <div class="f">
+        <label for="minYearAvg">연도별 최저 허용 (%)</label>
+        <input id="minYearAvg" type="number" value="0" step="0.5">
+        <span class="hint">한 해라도 이 아래면 탈락</span>
+      </div>
+    </div>
+    <div class="row">
+      <button class="act" id="btnSearch">조합 탐색 실행</button>
+      <span id="searchStatus" class="fstatus">일봉은 한 번만 받고 조합만 바꿔 계산하므로, 첫 실행 뒤로는 빠릅니다.</span>
+    </div>
+  </div>
+</section>
+
+<section id="searchSec" style="display:none">
+  <div class="stitle"><h2>상위권에 자주 나온 필터</h2><span id="searchMeta"></span></div>
+  <div class="panel">
+    <p class="note" style="margin-top:0"><b>이 표를 먼저 보십시오.</b> 개별 조합 1등보다 훨씬 믿을 만합니다.</p>
+    <table>
+      <thead><tr><th>필터</th><th>상위권 등장</th><th>비율</th><th>평균</th><th>손절률</th></tr></thead>
+      <tbody id="freqTable"></tbody>
+    </table>
+    <p class="note" id="baselineNote"></p>
+  </div>
+
+  <div class="stitle" style="margin-top:22px"><h2>살아남은 조합</h2><span>최대 30개</span></div>
+  <div class="panel" style="overflow-x:auto">
+    <table>
+      <thead><tr><th>조합</th><th>건수</th><th>평균</th><th>승률</th><th>목표도달</th><th>손절률</th><th>검증구간</th><th>최악의 해</th></tr></thead>
+      <tbody id="comboTable"></tbody>
+    </table>
+    <p class="note">검증 구간과 최악의 해가 둘 다 양호한 조합만 여기 올라옵니다. 그래도 실전에서 그대로 재현되지는 않습니다.</p>
+  </div>
+</section>
+
 <section id="compareSec" style="display:none">
   <div class="stitle"><h2>변형 비교</h2><span>실행할 때마다 쌓입니다</span></div>
   <div class="panel" style="overflow-x:auto">
@@ -292,6 +356,7 @@
         <li><b>일목균형표 계열 필터</b>는 "구름 위 상승추세에서 기준선까지 눌린 자리"를 잡습니다. 널리 참고되는 조건검색식을 항목별로 나눠 넣은 것이라, 하나씩 켜면서 어느 항목이 실제로 성적을 올리는지 확인할 수 있습니다. 120·240일선 조건은 일봉이 그만큼 필요하니 국내 기간을 1800일로 두고 쓰십시오.</li>
         <li><b>거래대금 500억 필터는 한국 기준</b>입니다. 미국은 단위가 백만 달러라 값이 맞지 않으니, 미국장에서는 이 항목을 끄고 쓰십시오.</li>
         <li><b>분할매수를 볼 때는 평균을 믿지 마십시오.</b> 손실을 확정하지 않고 미루면 상승장에서는 대부분 회복되므로 백테스트가 거의 항상 좋게 평가합니다. 진짜 위험은 “물타고도 못 살아난” 소수 거래에 있습니다. 그 비율, 최악의 거래, 하위 10% 값을 보십시오.</li>
+        <li><b>조합 탐색은 1등을 믿으면 안 됩니다.</b> 수백 개를 돌리면 1등은 운으로도 나옵니다. “상위권에 자주 나온 필터” 표를 보고, 거기 반복 등장하는 것만 실제 조건식에 넣을지 고민하십시오. 그리고 기준선(필터 없음)보다 못하면 그 필터는 도움이 안 되는 것입니다.</li>
         <li><b>연도별 표</b>에서 특정 해만 유독 좋거나 나쁘면, 그 조건식은 그 해의 장세에 기대고 있는 것입니다. 매년 비슷하게 나와야 믿을 만합니다. “안 팔았다면”은 목표·손절 없이 보유 기간을 다 채웠을 때의 수익률이라, 너무 일찍 파는지 판단하는 데 씁니다.</li>
         <li><b>진입률</b>은 신호 중 실제로 살 수 있었던 비율입니다. 눌림을 깊게 기다릴수록 성적은 좋아지지만 진입률이 떨어집니다. 진입률이 20% 아래로 내려가면 실전에서는 거의 기회가 없다는 뜻입니다.</li>
         <li><b>건수 30 미만</b>은 통계가 아닙니다. 종목 수나 기간을 늘리십시오.</li>
@@ -514,7 +579,70 @@
     }).join('');
   }
 
-  var PAGE_VERSION = '2026-09-13h';
+  $('btnSearch').addEventListener('click', function(){
+    var qs = new URLSearchParams({
+      market: $('market').value, n: $('n').value,
+      krDays: $('krDays').value, range: $('range').value,
+      target: $('target').value, stop: $('stop').value, hold: $('hold').value,
+      pullback: $('pullback').value, pullbackWait: $('pullbackWait').value,
+      base: $('useBase').checked ? '1' : '0',
+      maxFilters: $('maxFilters').value, objective: $('objective').value,
+      minTrades: $('minTrades').value, minYearAvg: $('minYearAvg').value,
+    });
+    if($('splitDate').value) qs.set('splitDate', $('splitDate').value);
+
+    var el = $('searchStatus');
+    el.className = 'fstatus busy';
+    el.textContent = '조합을 돌리는 중입니다… 일봉을 처음 받는다면 몇 분 걸릴 수 있습니다.';
+
+    fetch('/api/backtest/search?' + qs.toString()).then(function(r){
+      return r.json().then(function(j){ if(!r.ok) throw new Error(j.error || ('HTTP '+r.status)); return j; });
+    }).then(renderSearch).catch(function(e){
+      el.className = 'fstatus err';
+      el.textContent = '실패 — ' + e.message;
+    });
+  });
+
+  function renderSearch(d){
+    var el = $('searchStatus');
+    el.className = 'fstatus';
+    el.textContent = d.stocksUsed + '종목 · 조합 ' + d.combosTried + '개 중 ' + d.combosPassed + '개가 관문을 통과';
+
+    $('searchSec').style.display = 'block';
+    $('searchMeta').textContent = ({ avg:'평균 수익률', stop:'손절률', edge:'벤치마크 대비', test:'검증 구간' }[d.objective] || d.objective) + ' 기준';
+
+    $('freqTable').innerHTML = (d.filterFrequency||[]).length
+      ? d.filterFrequency.map(function(f){
+          return '<tr><td>' + esc(f.label) + '</td><td>' + f.count + '회</td>'
+            + '<td>' + plain(f.sharePct) + '</td>'
+            + '<td class="' + cls(f.avgReturnPct) + '">' + pct(f.avgReturnPct) + '</td>'
+            + '<td>' + plain(f.stopHitRatePct) + '</td></tr>';
+        }).join('')
+      : '<tr><td colspan="5">통과한 조합이 없습니다. 최소 신호 건수를 낮추거나 연도별 기준을 완화해 보십시오.</td></tr>';
+
+    var b = d.baseline;
+    $('baselineNote').innerHTML = b
+      ? '<b>기준선(필터 없음)</b> — ' + b.trades + '건 · 평균 ' + pct(b.avgReturnPct)
+        + ' · 손절률 ' + plain(b.stopHitRatePct) + ' · 검증구간 ' + pct(b.testAvgPct)
+        + '. <b>이보다 못한 조합은 의미가 없습니다.</b>'
+      : '';
+
+    $('comboTable').innerHTML = (d.top||[]).length
+      ? d.top.map(function(r){
+          var name = r.filterLabels && r.filterLabels.length
+            ? r.filterLabels.map(function(x){ return x.split(' (')[0]; }).join(' + ')
+            : '(필터 없음 · 기준선)';
+          return '<tr><td>' + esc(name) + '</td><td>' + r.trades + '</td>'
+            + '<td class="' + cls(r.avgReturnPct) + '">' + pct(r.avgReturnPct) + '</td>'
+            + '<td>' + plain(r.winRatePct) + '</td><td>' + plain(r.targetHitRatePct) + '</td>'
+            + '<td>' + plain(r.stopHitRatePct) + '</td>'
+            + '<td class="' + cls(r.testAvgPct) + '">' + pct(r.testAvgPct) + ' <span style="color:#7B8896">(' + r.testTrades + ')</span></td>'
+            + '<td class="' + cls(r.worstYearAvgPct) + '">' + pct(r.worstYearAvgPct) + '</td></tr>';
+        }).join('')
+      : '<tr><td colspan="8">통과한 조합이 없습니다.</td></tr>';
+  }
+
+  var PAGE_VERSION = '2026-09-13i';
   fetch('/api/health').then(function(r){ return r.json(); }).then(function(j){
     var same = j.build && j.build.indexOf(PAGE_VERSION) === 0;
     $('buildInfo').innerHTML = '화면 ' + PAGE_VERSION + ' · 서버 ' + esc(j.build || '(표시 없음)')

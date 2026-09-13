@@ -355,12 +355,12 @@
     closeVsTenkan: (b, p) => ratioTo(b.close, ichimoku(b.high, b.low, p).tenkan),
     closeVsKijun:  (b, p) => ratioTo(b.close, ichimoku(b.high, b.low, p).kijun),
     lowVsKijun:    (b, p) => ratioTo(b.low, ichimoku(b.high, b.low, p).kijun),
-    openVsKijun:   (b, p) => ratioTo(b.open || b.close, ichimoku(b.high, b.low, p).kijun),
+    openVsKijun:   (b, p) => ratioTo(b.open, ichimoku(b.high, b.low, p).kijun),
     closeVsSpanA:  (b, p) => ratioTo(b.close, ichimoku(b.high, b.low, p).spanA),
     closeVsSpanB:  (b, p) => ratioTo(b.close, ichimoku(b.high, b.low, p).spanB),
 
     // ── 그 밖
-    candleBody:    (b) => b.close.map((c, i) => (!(b.open[i] > 0)) ? null : (c / b.open[i]) * 100),
+    candleBody:    (b) => b.close.map((c, i) => (!(b.open && b.open[i] > 0)) ? null : (c / b.open[i]) * 100),
     newHighAge:    (b, p) => newHighAge(b.high, p.n || 120),
     maxTurnoverM:  (b, p) => maxTurnoverInM(b.close, b.volume, p.n || 20),
     maxVolumeSurge:(b, p) => maxVolumeSurgeIn(b.volume, p.n || 20),
@@ -440,6 +440,7 @@
     if (i < 1) return { ok: false, reason: 'barsAgo가 데이터 범위를 벗어남' };
 
     const cols = {
+      open: bars.map(b => (b.open != null ? b.open : b.close)),   // 시가를 쓰는 지표(양봉·시가 기준선)에 필요
       high: bars.map(b => b.high),
       low: bars.map(b => b.low),
       close: bars.map(b => b.close),
@@ -534,6 +535,7 @@
     const conditions = (config && Array.isArray(config.conditions)) ? config.conditions : [];
     const n = bars.length;
     const cols = {
+      open: bars.map(b => (b.open != null ? b.open : b.close)),
       high: bars.map(b => b.high), low: bars.map(b => b.low),
       close: bars.map(b => b.close), volume: bars.map(b => b.volume || 0),
     };
