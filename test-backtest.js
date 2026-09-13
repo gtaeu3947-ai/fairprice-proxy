@@ -366,5 +366,87 @@ console.log('\n[22] 연도별 갈라 보기');
   check('최악의 거래가 연도별로 기록됨', y26.worstTradePct === -6, y26.worstTradePct);
 }
 
+
+console.log('\n[23] 조합 탐색 — 부분집합 생성');
+{
+  const all = BT.subsets(['a', 'b', 'c'], 2);
+  check('크기 0~2인 부분집합 7개', all.length === 7, all.map(x => x.join('')));
+  check('빈 조합이 포함된다 (기준선)', all.some(x => x.length === 0));
+  check('크기 3은 제외', all.every(x => x.length <= 2), all.map(x => x.length));
+  check('중복 없음', new Set(all.map(x => x.join(','))).size === all.length);
+  const big = BT.subsets(['a','b','c','d','e'], 3);
+  check('5개에서 3개까지면 26개', big.length === 26, big.length);
+}
+
+console.log('\n[24] 조합 탐색 — 조건별 참/거짓 미리 만들기');
+{
+  const bars = mkBars(Array(200).fill(0).map((_, i) => 100 + i), {
+    volume: (i) => (i % 10 === 0 ? 5000 : 1000),
+  });
+  const pool = [
+    { key: 'X', indicator: 'close', type: 'above', level: 0 },          // 항상 참
+    { key: 'Y', indicator: 'close', type: 'above', level: 999999 },      // 항상 거짓
+    { key: 'Z', indicator: 'volumeRatio', params: { n: 20 }, type: 'above', level: 2 },
+  ];
+  const p = BT.prepareStock(bars, pool);
+  check('조건마다 배열이 만들어진다', Object.keys(p.flags).length === 3, Object.keys(p.flags));
+  check('항상 참인 조건은 전부 1', p.flags.X[150] === 1, p.flags.X[150]);
+  check('항상 거짓인 조건은 전부 0', p.flags.Y[150] === 0, p.flags.Y[150]);
+  check('거래량 급증일만 1', p.flags.Z[150] === 1 && p.flags.Z[151] === 0,
+    { a: p.flags.Z[150], b: p.flags.Z[151] });
+}
+
+console.log('\n[25] 조합 탐색 — 조합이 실제로 신호를 좁힌다');
+{
+  const bars = mkBars(Array(200).fill(0).map((_, i) => 100 + i * 0.1), {
+    volume: (i) => (i % 10 === 0 ? 5000 : 1000),
+  });
+  const pool = [
+    { key: 'A', indicator: 'close', type: 'above', level: 0 },
+    { key: 'B', indicator: 'volumeRatio', params: { n: 20 }, type: 'above', level: 2 },
+  ];
+  const prepared = [{ code: '1', name: '가', stock: BT.prepareStock(bars, pool), benchmark: [1, 1] }];
+  const opt = { holdDays: 5, targetPct: 3, stopPct: 3, warmupBars: 60, splitDate: '2026-06-01', minTrades: 1, minYearAvg: -99 };
+
+  const r = BT.evaluateCombos(prepared, [
+    { id: 0, filters: [], keys: ['A'] },
+    { id: 1, filters: ['vol'], keys: ['A', 'B'] },
+  ], opt);
+  check('조건을 더하면 신호가 줄어든다', r[1].trades < r[0].trades, { a: r[0].trades, b: r[1].trades });
+  check('둘 다 매매가 생긴다', r[0].trades > 0 && r[1].trades > 0, { a: r[0].trades, b: r[1].trades });
+  check('연도별 성적이 함께 나온다', Array.isArray(r[0].years) && r[0].years.length > 0, r[0].years);
+}
+
+console.log('\n[26] 과거에만 맞는 조합을 걸러내는가');
+{
+  const opt = { minTrades: 50, minYearAvg: 0 };
+  const ok = { trades: 100, testTrades: 30, avgReturnPct: 2, trainAvgPct: 2, testAvgPct: 2, worstYearAvgPct: 0.5 };
+  check('정상 조합은 통과', BT.passesGuards(ok, opt) === true);
+  check('표본 부족은 탈락', BT.passesGuards({ ...ok, trades: 20 }, opt) === false);
+  check('검증 구간 표본 부족도 탈락', BT.passesGuards({ ...ok, testTrades: 5 }, opt) === false);
+  check('검증 구간이 마이너스면 탈락', BT.passesGuards({ ...ok, testAvgPct: -0.1 }, opt) === false);
+  check('검증이 학습의 40% 미만이면 탈락',
+    BT.passesGuards({ ...ok, trainAvgPct: 5, testAvgPct: 1 }, opt) === false);
+  check('한 해라도 기준 아래면 탈락',
+    BT.passesGuards({ ...ok, worstYearAvgPct: -1 }, opt) === false);
+  check('전체 평균이 0 이하면 탈락', BT.passesGuards({ ...ok, avgReturnPct: 0 }, opt) === false);
+}
+
+console.log('\n[27] 상위권 필터 빈도 — 1등보다 이쪽을 본다');
+{
+  const top = [
+    { filters: ['a', 'b'], avgReturnPct: 3, stopHitRatePct: 20 },
+    { filters: ['a', 'c'], avgReturnPct: 2, stopHitRatePct: 24 },
+    { filters: ['a'], avgReturnPct: 2.5, stopHitRatePct: 22 },
+    { filters: ['b'], avgReturnPct: 1, stopHitRatePct: 30 },
+  ];
+  const freq = BT.filterFrequency(top, { a: 'A필터', b: 'B필터', c: 'C필터' });
+  check('가장 자주 등장한 필터가 맨 위', freq[0].id === 'a', freq.map(f => f.id));
+  check('등장 횟수', freq[0].count === 3, freq[0]);
+  check('상위권 중 비율', freq[0].sharePct === 75, freq[0].sharePct);
+  check('라벨이 붙는다', freq[0].label === 'A필터', freq[0].label);
+  check('그 필터가 든 조합들의 평균도 낸다', Math.abs(freq[0].avgReturnPct - 2.5) < 0.01, freq[0].avgReturnPct);
+}
+
 console.log('\n' + (fail ? fail + '개 실패' : '전부 통과'));
 process.exit(fail ? 1 : 0);

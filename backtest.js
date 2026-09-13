@@ -51,12 +51,23 @@ const r2 = (v) => (v == null || !isFinite(v)) ? null : Math.round(v * 100) / 100
  * @param opt   { holdDays, targetPct, stopPct, minPassCount, warmupBars }
  */
 function simulateOne(bars, config, opt) {
-  const hold = opt.holdDays;
-  const warmup = opt.warmupBars ?? 80;
   const condCount = (config?.conditions || []).length;
   const minPass = Math.min(opt.minPassCount ?? condCount, condCount);
-
   const ev = MC.evaluateSeries(bars, config);
+  return simulateSignals(bars, (i) => condCount > 0 && ev.passCount[i] >= minPass, opt,
+    (i) => ({ passCount: ev.passCount[i], strict: ev.strict[i] }));
+}
+
+/**
+ * 매매 규칙만 담당한다. "언제 신호인가"는 밖에서 주입한다.
+ *
+ * 이렇게 갈라놓은 이유: 조합 탐색은 수백 개 조합을 돌리는데, 조합마다 지표를
+ * 다시 계산하면 감당이 안 된다. 지표와 조건 판정은 한 번만 해두고 여기서는
+ * 진입·청산만 반복한다.
+ */
+function simulateSignals(bars, isSignal, opt, meta) {
+  const hold = opt.holdDays;
+  const warmup = opt.warmupBars ?? 80;
   const trades = [];
 
   // 눌림목 진입: 신호 다음 봉 시가에 바로 사지 않고, 신호일 종가 대비 -pullbackPct를
@@ -70,7 +81,7 @@ function simulateOne(bars, config, opt) {
   // 진입은 i+1봉 시가, 청산은 최대 i+hold봉. 그래서 i는 끝에서 hold만큼 남겨둔다.
   const tailRoom = hold + 1 + (pullbackPct > 0 ? pullbackWait : 0);
   for (let i = warmup; i < bars.length - tailRoom; i++) {
-    if (condCount === 0 || ev.passCount[i] < minPass) continue;
+    if (!isSignal(i)) continue;
 
     let entryBar, entry, entryOffset;
     if (pullbackPct > 0) {
@@ -165,8 +176,7 @@ function simulateOne(bars, config, opt) {
       entryOffset,
       exitReason, exitBars,
       mfePct: r2(mfe), maePct: r2(mae),
-      passCount: ev.passCount[i],
-      strict: ev.strict[i],
+      ...(meta ? meta(i) : {}),
     });
   }
   trades.missedEntries = missedEntries;
@@ -346,4 +356,145 @@ function aggregate(perStock, opt) {
   };
 }
 
-module.exports = { simulateOne, benchmarkReturns, summarize, splitByDate, aggregate, median, mean, percentile };
+
+/* ═════════════════════ 조합 탐색 ═════════════════════
+ *
+ * 필터를 하나씩 켜고 끄는 방식으로는 조합을 볼 수 없다. 필터 15개면 조합이
+ * 3만 가지가 넘는다. 그런데 수천 개를 돌려서 1등을 고르면 거의 확실히
+ * "과거에만 맞는 조합"을 고르게 된다.
+ *
+ * 그래서 이렇게 만든다.
+ *   - 1등이 아니라 상위권에 반복해서 등장하는 필터를 본다.
+ *   - 검증 구간에서 무너지는 조합은 자동 탈락시킨다.
+ *   - 연도별로 하나라도 크게 마이너스인 조합은 탈락시킨다.
+ *   - 표본이 모자란 조합은 아예 순위에 올리지 않는다.
+ *
+ * 속도: 지표 계산이 전체의 대부분이라, 종목마다 조건별 참/거짓을 한 번만
+ * 만들어 두고 조합은 그 불린 배열의 AND로만 판정한다.
+ */
+
+/** 종목 하나에 대해 조건별 참/거짓 배열을 미리 만들어 둔다. */
+function prepareStock(bars, conditionPool) {
+  const flags = {};
+  const config = { conditions: conditionPool };
+  const ev = MC.evaluateSeries(bars, config);
+  conditionPool.forEach(c => {
+    const arr = ev.perCond[c.key];
+    const u = new Uint8Array(bars.length);
+    for (let i = 0; i < bars.length; i++) u[i] = arr[i] ? 1 : 0;
+    flags[c.key] = u;
+  });
+  return { bars, flags };
+}
+
+/** 크기 0..maxSize인 모든 부분집합. */
+function subsets(ids, maxSize) {
+  const out = [[]];
+  const rec = (start, cur) => {
+    if (cur.length >= maxSize) return;
+    for (let i = start; i < ids.length; i++) {
+      const next = cur.concat(ids[i]);
+      out.push(next);
+      rec(i + 1, next);
+    }
+  };
+  rec(0, []);
+  return out;
+}
+
+/**
+ * 조합별 성적을 계산한다.
+ *
+ * @param prepared  [{ code, name, stock:{bars,flags}, benchmark:[] }]
+ * @param combos    [{ id, keys:[조건키] }]
+ */
+function evaluateCombos(prepared, combos, opt) {
+  const bench = [];
+  prepared.forEach(p => (p.benchmark || []).forEach(v => bench.push(v)));
+
+  return combos.map(combo => {
+    const allTrades = [];
+    prepared.forEach(p => {
+      const { bars, flags } = p.stock;
+      const arrays = combo.keys.map(k => flags[k]).filter(Boolean);
+      if (arrays.length !== combo.keys.length) return;   // 못 만든 조건이 있으면 건너뛴다
+      const isSignal = (i) => arrays.every(a => a[i] === 1);
+      simulateSignals(bars, isSignal, opt).forEach(t => allTrades.push({ ...t, code: p.code, name: p.name }));
+    });
+    allTrades.sort((a, b) => a.date.localeCompare(b.date));
+
+    const { train, test } = splitByDate(allTrades, opt.splitDate);
+    const sum = summarize(allTrades, bench);
+    const testSum = summarize(test, bench);
+
+    // 연도별 최저 성적 — 한 해라도 크게 무너지면 믿을 수 없다.
+    const byYearMap = {};
+    allTrades.forEach(t => {
+      const y = String(t.date).slice(0, 4);
+      (byYearMap[y] = byYearMap[y] || []).push(t.returnPct);
+    });
+    const years = Object.entries(byYearMap)
+      .map(([y, arr]) => ({ year: y, trades: arr.length, avg: r2(mean(arr)) }))
+      .sort((a, b) => a.year.localeCompare(b.year));
+    const meaningful = years.filter(y => y.trades >= 15);
+    const worstYear = meaningful.length ? Math.min(...meaningful.map(y => y.avg)) : null;
+
+    return {
+      id: combo.id,
+      filters: combo.filters,
+      trades: sum.trades || 0,
+      avgReturnPct: sum.avgReturnPct ?? null,
+      winRatePct: sum.winRatePct ?? null,
+      targetHitRatePct: sum.targetHitRatePct ?? null,
+      stopHitRatePct: sum.stopHitRatePct ?? null,
+      edgeVsBenchmarkPct: sum.edgeVsBenchmarkPct ?? null,
+      testTrades: testSum.trades || 0,
+      testAvgPct: testSum.avgReturnPct ?? null,
+      trainAvgPct: summarize(train, bench).avgReturnPct ?? null,
+      worstYearAvgPct: worstYear,
+      years,
+    };
+  });
+}
+
+/**
+ * 과거에만 맞는 조합을 걸러낸다.
+ *
+ * 여기서 느슨하게 두면 탐색의 의미가 없어진다. 수백 개 중 1등은 운으로도 나오므로,
+ * "여러 해에 걸쳐 무너지지 않았는가"를 통과 조건으로 삼는다.
+ */
+function passesGuards(r, opt) {
+  if (r.trades < opt.minTrades) return false;
+  if (r.testTrades < Math.max(10, Math.round(opt.minTrades / 4))) return false;
+  if (r.avgReturnPct == null || r.avgReturnPct <= 0) return false;
+  // 검증 구간이 학습 구간의 절반에도 못 미치면 과최적화로 본다.
+  if (r.testAvgPct == null || r.testAvgPct <= 0) return false;
+  if (r.trainAvgPct != null && r.trainAvgPct > 0 && r.testAvgPct < r.trainAvgPct * 0.4) return false;
+  // 표본이 있는 해 중 하나라도 크게 마이너스면 탈락.
+  if (r.worstYearAvgPct != null && r.worstYearAvgPct < opt.minYearAvg) return false;
+  return true;
+}
+
+/** 상위권에 어떤 필터가 반복해 등장하는지 — 개별 조합보다 이쪽이 믿을 만하다. */
+function filterFrequency(top, labels) {
+  const counts = {};
+  top.forEach(r => (r.filters || []).forEach(f => {
+    if (!counts[f]) counts[f] = { id: f, label: labels[f] || f, count: 0, avgSum: 0, stopSum: 0 };
+    counts[f].count++;
+    counts[f].avgSum += (r.avgReturnPct || 0);
+    counts[f].stopSum += (r.stopHitRatePct || 0);
+  }));
+  return Object.values(counts)
+    .map(c => ({
+      id: c.id, label: c.label, count: c.count,
+      sharePct: r2((c.count / Math.max(1, top.length)) * 100),
+      avgReturnPct: r2(c.avgSum / c.count),
+      stopHitRatePct: r2(c.stopSum / c.count),
+    }))
+    .sort((a, b) => b.count - a.count);
+}
+
+module.exports = {
+  simulateOne, simulateSignals, benchmarkReturns, summarize, splitByDate, aggregate,
+  median, mean, percentile, prepareStock, subsets, evaluateCombos, passesGuards, filterFrequency,
+};

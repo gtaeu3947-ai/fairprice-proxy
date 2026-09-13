@@ -206,5 +206,34 @@ console.log('\n[11] 원식 전체를 조합했을 때 동작하는가');
   check('조건별 값이 기록된다', r.values.A && typeof r.values.A.now === 'number', r.values.A);
 }
 
+
+console.log('\n[12] 시가를 쓰는 지표 (전 구간 평가에서 빠뜨렸던 부분)');
+{
+  // evaluate/evaluateSeries가 시가를 넘기지 않아 양봉·시가기준선 지표가 터진 적이 있다.
+  const n = 100;
+  const bars = [];
+  for (let i = 0; i < n; i++) {
+    const c = 100 + i * 0.1;
+    bars.push({ date: '2026-01-' + String((i % 28) + 1).padStart(2, '0'),
+      open: c * 0.99, high: c * 1.01, low: c * 0.98, close: c, volume: 1000 });
+  }
+  const cfg = { conditions: [
+    { key: 'G', indicator: 'candleBody', params: {}, type: 'above', level: 100 },
+    { key: 'O', indicator: 'openVsKijun', params: {}, type: 'within', level: 100, tol: 5 },
+  ] };
+  const r = M.evaluate(bars, cfg, {});
+  check('evaluate가 터지지 않는다', r.ok === true, r.reason);
+  check('양봉 판정이 동작 (시가 < 종가)', r.conds.G === true, r.conds);
+
+  const es = M.evaluateSeries(bars, cfg);
+  check('evaluateSeries도 터지지 않는다', es.perCond.G.length === n, es.perCond.G && es.perCond.G.length);
+  check('전 구간에서 양봉으로 잡힌다', es.perCond.G[99] === true, es.perCond.G[99]);
+
+  // 시가가 없는 데이터(일부 출처)에서도 죽지 않아야 한다
+  const noOpen = bars.map(b => ({ ...b, open: undefined }));
+  const r2 = M.evaluate(noOpen, cfg, {});
+  check('시가가 없어도 평가는 성립', r2.ok === true, r2.reason);
+}
+
 console.log('\n' + (fail ? fail + '개 실패' : '전부 통과'));
 process.exit(fail ? 1 : 0);

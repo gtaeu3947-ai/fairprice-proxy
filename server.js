@@ -2443,6 +2443,159 @@ async function runBacktest(opt) {
   };
 }
 
+/**
+ * 조합 탐색.
+ *
+ * 일봉은 한 번만 받고 조건별 참/거짓도 종목마다 한 번만 만든다.
+ * 그 뒤로는 조합마다 불린 배열을 AND로 합치기만 하므로 수백 조합도 금방 끝난다.
+ */
+async function runComboSearch(opt) {
+  const base = opt.useBaseConditions ? loadMomentumConfig().conditions : [];
+
+  // 조건 풀: 기본 조건식 + 모든 추가 필터. 키가 겹치지 않게 필터마다 접두어를 붙인다.
+  const pool = [...base];
+  const filterConds = {};   // filterId -> [조건키]
+  Object.entries(BACKTEST_FILTERS).forEach(([id, f]) => {
+    const keys = [];
+    (f.conds || []).forEach((c, i) => {
+      const key = 'f_' + id + (i ? '_' + i : '');
+      pool.push({ ...c, key });
+      keys.push(key);
+    });
+    filterConds[id] = keys;
+  });
+  if (!pool.length) throw new Error('조건이 하나도 없습니다.');
+
+  // 유니버스 + 일봉
+  let universe;
+  if (opt.market === 'US') {
+    const built = await fetchUsUniverse({ mode: opt.usMode, minPrice: opt.usMinPrice, minMarketCapM: opt.usMinMarketCapM });
+    universe = built.list.slice(0, opt.universeN);
+  } else {
+    universe = await fetchMarketCapUniverse(opt.universeN, opt.market);
+  }
+
+  const prepared = [];
+  const prepFailures = [];
+  const BATCH = opt.market === 'US' ? 3 : 6;
+  for (let i = 0; i < universe.length; i += BATCH) {
+    const batch = universe.slice(i, i + BATCH);
+    const got = await Promise.all(batch.map(async (item) => {
+      try {
+        const res = opt.market === 'US'
+          ? await US.fetchUsBars(item.code, opt.yahooRange)
+          : await fetchOhlcv(item.code, opt.krCalendarDays);
+        const bars = res.bars;
+        if (bars.length < opt.warmupBars + opt.holdDays + 20) {
+          return { error: `일봉 ${bars.length}개로는 부족 (필요 ${opt.warmupBars + opt.holdDays + 20})`, code: item.code };
+        }
+        return {
+          code: item.code, name: item.name,
+          stock: BT.prepareStock(bars, pool),
+          benchmark: BT.benchmarkReturns(bars, opt),
+        };
+      } catch (e) { return { error: e.message, code: item.code }; }
+    }));
+    got.forEach(g => {
+      if (g && !g.error && g.stock) prepared.push(g);
+      else if (g && g.error) prepFailures.push(g);
+    });
+    if (opt.market === 'US' && i + BATCH < universe.length) await US.sleep(350);
+  }
+  if (!prepared.length) {
+    throw new Error('일봉을 하나도 받지 못했습니다. '
+      + (prepFailures.length ? prepFailures[0].error : '유니버스 ' + universe.length + '종목 전부 봉 수 부족'));
+  }
+
+  // 조합 만들기 — 기본 조건식은 항상 포함하고 추가 필터만 조합한다.
+  const baseKeys = base.map(c => c.key);
+  const filterIds = Object.keys(filterConds).filter(id => filterConds[id].length);
+  const combos = BT.subsets(filterIds, opt.maxFilters).map((ids, idx) => ({
+    id: idx,
+    filters: ids,
+    keys: [...baseKeys, ...ids.flatMap(id => filterConds[id])],
+  })).filter(c => c.keys.length > 0);
+
+  const results = BT.evaluateCombos(prepared, combos, opt);
+  const labels = {};
+  Object.entries(BACKTEST_FILTERS).forEach(([id, f]) => { labels[id] = f.label; });
+
+  const baseline = results.find(r => r.filters.length === 0) || null;
+  const passed = results.filter(r => BT.passesGuards(r, opt));
+
+  const sorters = {
+    avg: (a, b) => (b.avgReturnPct ?? -99) - (a.avgReturnPct ?? -99),
+    stop: (a, b) => (a.stopHitRatePct ?? 99) - (b.stopHitRatePct ?? 99),
+    edge: (a, b) => (b.edgeVsBenchmarkPct ?? -99) - (a.edgeVsBenchmarkPct ?? -99),
+    test: (a, b) => (b.testAvgPct ?? -99) - (a.testAvgPct ?? -99),
+  };
+  passed.sort(sorters[opt.objective] || sorters.avg);
+  const top = passed.slice(0, 30);
+
+  return {
+    market: opt.market,
+    objective: opt.objective,
+    stocksUsed: prepared.length,
+    universeSize: universe.length,
+    combosTried: combos.length,
+    combosPassed: passed.length,
+    guards: {
+      minTrades: opt.minTrades, minYearAvg: opt.minYearAvg,
+      note: '검증 구간이 학습 구간의 40% 미만이거나, 표본 15건 이상인 해 중 하나라도 기준 아래면 탈락',
+    },
+    rules: { holdDays: opt.holdDays, targetPct: opt.targetPct, stopPct: opt.stopPct, pullbackPct: opt.pullbackPct },
+    baseline,
+    top: top.map(r => ({ ...r, filterLabels: r.filters.map(f => labels[f] || f) })),
+    filterFrequency: BT.filterFrequency(top, labels),
+    labels,
+  };
+}
+
+app.get('/api/backtest/search', checkStatsAuth, async (req, res) => {
+  const num = (raw, def) => {
+    if (raw === undefined || raw === '') return def;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : def;
+  };
+  const market = ['KOSPI', 'KOSDAQ', 'ALL', 'US'].includes(req.query.market) ? req.query.market : 'KOSDAQ';
+  const krDays = Math.min(1800, Math.max(300, Math.round(num(req.query.krDays, 1800))));
+
+  const opt = {
+    market,
+    universeN: Math.min(200, Math.max(5, Math.round(num(req.query.n, 150)))),
+    useBaseConditions: req.query.base !== '0',
+    maxFilters: Math.min(4, Math.max(1, Math.round(num(req.query.maxFilters, 2)))),
+    objective: ['avg', 'stop', 'edge', 'test'].includes(req.query.objective) ? req.query.objective : 'avg',
+    minTrades: Math.max(10, Math.round(num(req.query.minTrades, 50))),
+    minYearAvg: num(req.query.minYearAvg, 0),
+    holdDays: Math.min(60, Math.max(1, Math.round(num(req.query.hold, 10)))),
+    targetPct: Math.max(0.5, num(req.query.target, 6)),
+    stopPct: Math.max(0.5, num(req.query.stop, 6)),
+    pullbackPct: Math.max(0, num(req.query.pullback, 5)),
+    pullbackWaitBars: Math.min(10, Math.max(1, Math.round(num(req.query.pullbackWait, 3)))),
+    addOnDropPct: 0,
+    warmupBars: Math.min(260, Math.max(60, Math.round(num(req.query.warmup, 250)))),
+    krCalendarDays: krDays,
+    yahooRange: ['1y', '2y', '5y', '10y'].includes(req.query.range) ? req.query.range : '5y',
+    usMode: req.query.usMode === 'turnover' ? 'turnover' : 'marketCap',
+    usMinPrice: Math.max(0, num(req.query.minPrice, 5)),
+    usMinMarketCapM: Math.max(0, num(req.query.minMarketCap, 500)),
+    splitDate: String(req.query.splitDate || '').match(/^\d{4}-\d{2}-\d{2}$/) ? req.query.splitDate : null,
+  };
+  if (!opt.splitDate) {
+    const d = new Date();
+    const span = market === 'US' ? ({ '1y': 365, '2y': 730, '5y': 1825, '10y': 3650 })[opt.yahooRange] : krDays;
+    d.setDate(d.getDate() - Math.round(span / 3));
+    opt.splitDate = d.toISOString().slice(0, 10);
+  }
+
+  try {
+    res.json(await runComboSearch(opt));
+  } catch (e) {
+    res.status(502).json({ error: e.message, stack: (e.stack || '').split('\n').slice(0, 4) });
+  }
+});
+
 app.get('/api/backtest/filters', checkStatsAuth, (req, res) => {
   const base = loadMomentumConfig();
   res.json({
@@ -3290,7 +3443,7 @@ app.get('/api/flow/:code', checkStatsAuth, async (req, res) => {
  * "고쳤는데 왜 그대로냐"의 원인이 대부분 "아직 예전 코드가 돌고 있다"였다.
  * BUILD를 올려두면 /api/health만 열어봐도 지금 무엇이 떠 있는지 바로 알 수 있다.
  */
-const BUILD = '2026-09-13h 백테스트 연도별 성적';
+const BUILD = '2026-09-13i 조합 탐색';
 
 app.get('/api/health', (_, res) => res.json({
   ok: true,
@@ -3533,7 +3686,7 @@ module.exports = {
   fetchOhlcv, fetchOhlcvChartApi, fetchOhlcvHtml, fetchSectorMap, fetchSectorList, fetchSectorMembers,
   evaluateOne, computeSectorStrength, runMomentum, fetchSectorMap, fetchSectorMapFromStocks,
   fetchSectorListApi, fetchSectorMembersApi, splitSectorRanks, runUsMomentum, fetchUsUniverse,
-  runBacktest, buildBacktestConfig, BACKTEST_FILTERS, loadMomentumConfig, normalizeConditions,
+  runBacktest, buildBacktestConfig, BACKTEST_FILTERS, runComboSearch, loadMomentumConfig, normalizeConditions,
   withRetry, fetchMarketCapPage, collectStocksFromJson, extractStocksFromText, extractStocksFromAnchors,
   // 테스트에서 캐시 상태를 리셋하기 위한 것. alsoLastGood=true면 '마지막 성공 목록'까지 지운다.
   __clearCaches(alsoLastGood) {
